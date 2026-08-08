@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turning a Tekla or Advance Steel Material List Into a Cutting Plan</title>
+<meta name="description" content="How to get from a Tekla Structures or Advance Steel material list export to a usable steel cutting plan — which columns matter, the export quirks that break optimizers, and how to handle lists with no fixed format.">
+<link rel="canonical" href="https://steeloptimizer.com/material-list-to-cutting-plan">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Turning a Tekla or Advance Steel Material List Into a Cutting Plan">
+<meta property="og:description" content="Which columns matter, the export quirks that break optimizers, and how to handle lists with no fixed format.">
+<script type="application/ld+json">
+{
+  "@context":"https://schema.org",
+  "@type":"Article",
+  "headline":"Turning a Tekla or Advance Steel Material List Into a Cutting Plan",
+  "author":{"@type":"Person","name":"Mezher Nada"},
+  "about":"Structural steel detailing, material lists, cutting optimization"
+}
+</script>
+<style>
+  :root{--ink:#0b0f17;--mut:#475569;--acc:#b45309;--line:#e2e8f0}
+  *{box-sizing:border-box}
+  body{margin:0;font:17px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:#fff}
+  .wrap{max-width:720px;margin:0 auto;padding:48px 22px 80px}
+  h1{font-size:31px;line-height:1.28;margin:0 0 8px}
+  h2{font-size:22px;margin:38px 0 12px;padding-top:8px;border-top:1px solid var(--line)}
+  h3{font-size:18px;margin:26px 0 8px}
+  .sub{color:var(--mut);font-size:15px;margin-bottom:32px}
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:15px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f8fafc;font-weight:600}
+  code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:14px;font-family:ui-monospace,Menlo,monospace}
+  .note{background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;margin:22px 0;font-size:15px}
+  .cta{margin:44px 0 0;padding:22px;background:var(--ink);border-radius:10px;color:#f8fafc}
+  .cta a{color:#fbbf24;font-weight:600;text-decoration:none}
+  .cta p{margin:0 0 8px}
+  .cta .small{font-size:14px;color:#94a3b8;margin:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Turning a Tekla or Advance Steel Material List Into a Cutting Plan</h1>
+<p class="sub">Which columns actually matter, the export quirks that break optimizers, and what to do when the list has no fixed format at all.</p>
+
+<p>The model is finished, the material list is exported, and now someone has to decide how many bars to buy. This step — between the detailing software and the purchase order — is where most cutting optimizers fall down, and the reason is almost never the optimization itself. It is the file.</p>
+
+<h2>What a cutting plan actually needs</h2>
+
+<p>Whatever the source, an optimizer needs three things per row, and nothing else is essential:</p>
+
+<table>
+  <tr><th>Field</th><th>Why it matters</th></tr>
+  <tr><td><strong>Profile</strong></td><td>Parts can only be cut from stock of the same section. HEB 360 and IPE 400 are separate problems.</td></tr>
+  <tr><td><strong>Length</strong></td><td>The cut length of the part, in mm. Not the member length, not the assembly length.</td></tr>
+  <tr><td><strong>Quantity</strong></td><td>How many identical pieces at that length.</td></tr>
+</table>
+
+<p>Grade, mark, assembly reference and weight are useful on the report, but they do not change the cutting plan. If your list has the three fields above, it is optimizable — regardless of which software produced it.</p>
+
+<h2>Member length is not cut length</h2>
+
+<p>This is the most expensive misreading on the list, and the easiest to miss, because the number looks perfectly reasonable either way.</p>
+
+<p>A beam modelled as an 8000&nbsp;mm member does not arrive at the saw as 8000&nbsp;mm. Depending on what the export contains, the figure in the length column may be any of the following:</p>
+
+<table>
+  <tr><th>Length reported</th><th>What it measures</th><th>Use for cutting?</th></tr>
+  <tr><td>System / member length</td><td>Grid-line to grid-line, the analytical member</td><td>No</td></tr>
+  <tr><td>Assembly length</td><td>Main part plus welded attachments, end plates, stiffeners</td><td>No</td></tr>
+  <tr><td>Part length</td><td>The single piece of steel to be cut</td><td><strong>Yes</strong></td></tr>
+  <tr><td>Cut length</td><td>Part length adjusted for skewed or mitred end cuts</td><td>Yes</td></tr>
+</table>
+
+<p>The gaps between these are not small. A 12&nbsp;m beam framing into column flanges may have a system length of 12000&nbsp;mm, a part length near 11700&nbsp;mm after end clearances, and an assembly length of 11900&nbsp;mm once end plates are counted. Optimize on the wrong one and every bar in the package is planned against a length that will never be cut.</p>
+
+<h3>Which way the error runs</h3>
+
+<p>Using system or assembly length instead of part length inflates every piece. On a package with parts near the stock length, that is the difference between two parts fitting a 12&nbsp;m bar and only one fitting &mdash; the plan orders roughly twice the steel it needs, and the waste figure looks catastrophic for no real reason.</p>
+
+<p>The reverse error is worse in a different way. If the export lists part lengths but the fabricator adds an end preparation or a mitre that was not in the model, parts come up short and the material has already been ordered.</p>
+
+<h3>How to tell which one you have</h3>
+
+<ul>
+  <li><strong>Check the column heading first.</strong> Tekla templates label these distinctly &mdash; <code>LENGTH</code>, <code>ASSEMBLY_LENGTH</code>, <code>PART_LENGTH</code>, <code>CUT_LENGTH</code> &mdash; but office templates rename them freely, so the heading alone is not proof.</li>
+  <li><strong>Look for suspiciously round numbers.</strong> A column that is almost entirely multiples of 100 or 500 is describing grid geometry, not cut steel. Real part lengths are untidy: 11742, 8317, 4085.</li>
+  <li><strong>Count the rows against the model.</strong> An assembly list has fewer rows than a part list, because attachments are folded into their parent. If the row count is well below the piece count you expect, you are holding an assembly list.</li>
+  <li><strong>Take one beam and check it by hand.</strong> Pick a member you know, read its length off the model, and compare. Two minutes here is worth more than any amount of checking afterwards.</li>
+</ul>
+
+<div class="note">
+<strong>Ask the detailer, once, in writing.</strong> &ldquo;Is this part length or assembly length?&rdquo; is a one-line question with a one-line answer, and it settles the issue for every subsequent export on the project. Most disputes over short-delivered steel trace back to this question never having been asked.
+</div>
+
+<h2>Tekla Structures</h2>
+
+<p>Tekla reports are template-driven, so the column headings depend entirely on which template was used. A report built from a bolt list template will not contain cut lengths at all.</p>
+
+<p>Practical points:</p>
+
+<ul>
+  <li>Export a <strong>part list</strong>, not an assembly list. Assembly lengths include connected members and will over-order badly.</li>
+  <li>Reports often carry a title block and blank rows above the header. The header may sit on row 6 or row 12 rather than row 1.</li>
+  <li>Subtotal and total rows appear mid-table in many templates. These are not parts and will inflate quantities if read as data.</li>
+  <li>Column names vary by template and by office standard: <code>PROFILE</code>, <code>SECTION</code>, <code>PART_PROFILE</code> all appear in practice.</li>
+</ul>
+
+<h2>Advance Steel</h2>
+
+<p>Advance Steel exports are structured differently and carry a specific trap.</p>
+
+<ul>
+  <li>The <strong>Description</strong> column frequently holds a free-text string rather than the section designation. Reading it as the profile produces nonsense groupings.</li>
+  <li>Material grade strings such as <code>S355JR</code> sit close to dimension columns and are easily misread as sizes.</li>
+  <li>Imperial-configured installations export lengths as fractions — <code>9' 3 1/2"</code> — which is unreadable as a number without conversion.</li>
+  <li>Quantity may be labelled <code>Number</code>, <code>Qty</code> or <code>Count</code> depending on the template language.</li>
+</ul>
+
+<div class="note">
+<strong>The fraction problem is the most damaging one.</strong> A length field containing <code>3 1/2</code> parsed naively can be read as the number 3, silently truncating every part in the package. The plan will look plausible and be entirely wrong. Always spot-check two or three known lengths against the model before trusting an import.
+</div>
+
+<h2>Lists that came from neither</h2>
+
+<p>A large share of real cutting lists are not exports at all. They are typed — by a fabricator working from marked-up drawings, or by a QS rebuilding a take-off in Excel because the detailer's file arrived in an unusable state. These lists have no standard whatsoever: columns in any order, merged cells, units in the header, notes in the middle of the data.</p>
+
+<p>This is worth stating plainly because most optimization software treats it as an edge case, when in practice it is the common case on smaller packages and subcontract work.</p>
+
+<h2>Why templates are the wrong solution</h2>
+
+<p>The usual answer is a required template: download our format, fill it in, upload it. This works in a demo and fails on site, for a simple reason — retyping a 400-row material list into someone else's spreadsheet is slower than planning the cutting by eye. So nobody does it, and the software goes unused.</p>
+
+<p>The better approach is to make the software adapt to the file rather than the reverse:</p>
+
+<ol>
+  <li><strong>Find the header row</strong> by scanning down the sheet rather than assuming row 1.</li>
+  <li><strong>Match columns by alias</strong> — profile / section / size / member, qty / quantity / no. / pcs / count.</li>
+  <li><strong>Fall back to inference</strong> where headers are missing: a column of values between 500 and 15000 in a steel list is almost certainly a length in mm.</li>
+  <li><strong>Ask, if all else fails.</strong> A dropdown that lets the user point at the right column takes ten seconds and always works.</li>
+</ol>
+
+<p>Step 4 is the one that matters most and gets skipped most often. Automatic detection will fail on some sheets — that is unavoidable given how varied real files are. What is avoidable is failing without giving the user any way forward.</p>
+
+<h2>Checks worth running on any import</h2>
+
+<table>
+  <tr><th>Check</th><th>What it catches</th></tr>
+  <tr><td>Piece count against the model</td><td>Subtotal rows read as parts; filtered rows omitted</td></tr>
+  <tr><td>Longest part against stock length</td><td>Parts that cannot be cut from available stock at all</td></tr>
+  <tr><td>Two or three known lengths spot-checked</td><td>Unit errors, fraction truncation, assembly-versus-part lengths</td></tr>
+  <tr><td>Profile count</td><td>Description column misread as profile, producing dozens of phantom sections</td></tr>
+</table>
+
+<p>These take a minute and catch nearly every import error that matters. An optimizer will happily produce a confident, well-formatted, completely wrong plan from a misread file — the arithmetic is only as good as the parse.</p>
+
+<div class="cta">
+<p><strong>Steel Optimizer</strong> reads material lists without a template.</p>
+<p class="small">Drop in an export from Tekla Structures, from Advance Steel, or a sheet you typed yourself. It locates the header and matches the columns on its own; where it cannot, you point at them in a dropdown. One click returns the cutting plan, the bars to buy, the tonnage and the waste percentage — and leftover offcuts are registered and carried into the next project.</p>
+<p style="margin-top:14px"><a href="https://steeloptimizer.com/">Open the optimizer →</a></p>
+</div>
+
+</div>
+</body>
+</html>
