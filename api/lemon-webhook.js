@@ -1,11 +1,11 @@
-// Vercel serverless function — Lemon Squeezy → Supabase «memberships»  (Steel Optimizer)
-// 1. GitHub: put this file at  api/lemon-webhook.js  (folder "api" at the top of the repo, next to "src" — not inside it)
-// 2. Vercel → Project → Settings → Environment Variables (then Redeploy):
+// Vercel serverless function - Lemon Squeezy -> Supabase "memberships"  (Steel Optimizer)
+// 1. GitHub: put this file at  api/lemon-webhook.js  (folder "api" at the top of the repo, next to "src" - not inside it)
+// 2. Vercel -> Project -> Settings -> Environment Variables (then Redeploy):
 //      SUPABASE_URL                  https://cjeqlypqoxiwnleimwlx.supabase.co
-//      SUPABASE_SERVICE_ROLE_KEY     the Supabase secret key (sb_secret_…) — only here, never in the app file
+//      SUPABASE_SERVICE_ROLE_KEY     the Supabase secret key (sb_secret_...) - only here, never in the app file
 //      LEMONSQUEEZY_WEBHOOK_SECRET   any long random text; type the same text in Lemon Squeezy
-// 3. Lemon Squeezy → Settings → Webhooks → +  URL: https://steeloptimizer.com/api/lemon-webhook
-//      Signing secret: the same text · Events: every "subscription_…" event
+// 3. Lemon Squeezy -> Settings -> Webhooks -> +  URL: https://steeloptimizer.com/api/lemon-webhook
+//      Signing secret: the same text - Events: every "subscription_..." event
 // Checks the Lemon Squeezy signature, then saves the subscription (status, renewal date, customer portal)
 // against the signed-in user id the app sends to the checkout. Other events are ignored.
 import crypto from "node:crypto";
@@ -54,9 +54,9 @@ export default async function handler(req, res) {
   };
   if (UUID.test(String(custom.user_id || ""))) row.user_id = String(custom.user_id);   // never overwrite with empty
 
-  const r = await fetch(${sbUrl}/rest/v1/memberships?on_conflict=ls_subscription_id, {
+  const r = await fetch(sbUrl + "/rest/v1/memberships?on_conflict=ls_subscription_id", {
     method: "POST",
-    headers: { apikey: sbKey, ...(sbKey.split(".").length === 3 ? { Authorization: Bearer ${sbKey} } : {}),   // sb_secret_… keys: apikey header only
+    headers: { apikey: sbKey, ...(sbKey.split(".").length === 3 ? { Authorization: "Bearer " + sbKey } : {}),   // sb_secret_... keys: apikey header only
       "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify(row),
   });
