@@ -89,7 +89,7 @@ const SO_DEMO_PLATES = "500x300x12x4|380x250x12x6|600x400x20x3|280x180x8x8";
 function soIsDemoPlates(parts) {
   try { return (parts || []).map(p => `${+p.length}x${+p.width}x${+p.thickness}x${+p.qty}`).join("|") === SO_DEMO_PLATES; } catch { return false; }
 }
-const SO_BUILD = "2026-09-30";   // sent with every usage alert → shows which version is live
+const SO_BUILD = "2026-10-01l";   // sent with every usage alert → shows which version is live
 function alertMe(what, detail) {
   if (!ALERT_ME_ON_USE || typeof window === "undefined") return;
   if (_alertCount >= 20) return;                       // cap per session
@@ -5621,16 +5621,25 @@ const CONTACT = {
 /* Thin bar at the very top: the moment an import looks wrong, the way out is
    already on screen. A failed file mailed to us is worth more than a silent
    bounce — it is the only way to find out what the parser cannot read yet. */
+/* Release k: the Section Library (top-left) and language (top-right) buttons are fixed at
+   top:16, about 35 px tall and up to ~215 px wide (Spanish label). On phones and tablets they
+   covered this bar's text. Wide screens (>= 1000 px) keep the text between the two buttons;
+   narrower screens put the text under them. false = the old layout. */
+const TOPBAR_FIT_ENABLED = true;
+const SO_TOPBAR_CSS = ".so-topbar{padding-left:236px!important;padding-right:236px!important}"
+  + "@media (max-width:999px){.so-topbar{padding:60px 16px 10px!important}}";
+
 function ContactTopBar() {
   const t = useT();
   if (!CONTACT.email) return null;
   return (
-    <div style={{
+    <div className={TOPBAR_FIT_ENABLED ? "so-topbar" : undefined} style={{
       position: "relative", zIndex: 5, textAlign: "center",
       padding: "8px 16px", fontSize: 14.5, lineHeight: 1.6,
       background: "rgba(245,158,11,.08)", borderBottom: "1px solid rgba(245,158,11,.18)",
       color: "#94a3b8", fontFamily: "'Space Mono', monospace",
     }}>
+      {TOPBAR_FIT_ENABLED && <style>{SO_TOPBAR_CSS}</style>}
       {t("ctTop")}{" "}
       <a href={`mailto:${CONTACT.email}?subject=Steel%20Optimizer%20-%20file%20did%20not%20import`}
          onClick={() => track("contact_click", { via: "topbar" })}
@@ -6587,7 +6596,8 @@ class ErrorBoundary extends Component {
    Accounts: Supabase Auth — passwords are stored hashed by Supabase, never here.
              Create account → Supabase e-mails an activation link → the link opens
              this site signed in. Unactivated accounts cannot sign in.
-   Payment:  Lemon Squeezy checkout (cards, Apple Pay, Google Pay, PayPal).
+   Payment:  Lemon Squeezy's own checkout page in a new tab (cards, PayPal, Apple Pay on Safari,
+             Google Pay on Chrome) - CHECKOUT_PAGE_ENABLED below; false = the in-page overlay.
              Lemon Squeezy → /api/lemon-webhook (Vercel) → Supabase «memberships»
              → the app reads the signed-in user's own row.
    Owner test: open  steeloptimizer.com/?paytest=1  → this browser gets the full flow
@@ -6605,6 +6615,15 @@ const MEMBERSHIP = {
   loginFor: "tester",       // ◄ who is asked to sign in at ⚡ Optimize: "tester" = only a browser opened with ?paytest=1 (visitors use the app as today) · "everyone"
   payFor: "tester",         // ◄ who must pay at ⚡ Optimize:            "tester" = only a browser opened with ?paytest=1 · "everyone" · "nobody"
 };
+// Release l: Apple Pay. Lemon Squeezy shows Apple Pay (Safari) and Google Pay (Chrome) on its own checkout
+// page only, never inside the in-page overlay (open request on their feedback board). true = the checkout
+// opens as Lemon Squeezy's page in a new tab; this tab waits and unlocks by itself.
+// Lemon Squeezy -> Products -> the product -> Confirmation modal -> Button link:
+//   https://steeloptimizer.com/?paid=1   (that tab then closes itself and the customer is back here)
+const CHECKOUT_PAGE_ENABLED = true;   // ◄ false = the in-page overlay (cards + PayPal only, as in release k)
+const SO_PAY_BADGES = CHECKOUT_PAGE_ENABLED
+  ? ["Visa", "Mastercard", "Amex", "Apple Pay", "Google Pay", "PayPal"]
+  : ["Visa", "Mastercard", "Amex", "PayPal"];
 const LOGIN_ENABLED = true;      // ◄ false = no e-mail / password anywhere (app exactly as before)
 const PAYMENTS_ENABLED = true;   // ◄ false = free app: no plans, no checkout, no Lemon Squeezy script, no subscription look-ups
 const MEMBERSHIP_ON = LOGIN_ENABLED && !!(MEMBERSHIP.supabaseUrl && MEMBERSHIP.supabaseAnonKey);
@@ -6667,6 +6686,10 @@ const SO_MT = {
   checkAgain: { en: "I've paid — check again", ar: "دفعت — تحقّق مرة أخرى", ru: "Я оплатил — проверить снова", zh: "我已付款 — 再次检查", es: "Ya pagué: comprobar de nuevo" },
   notYet:     { en: "Payment not confirmed yet. If you have paid, wait a minute and check again.", ar: "لم يُؤكَّد الدفع بعد. إذا كنت دفعت، انتظر دقيقة ثم تحقّق مجددًا.", ru: "Оплата ещё не подтверждена. Если вы оплатили, подождите минуту и проверьте снова.", zh: "付款尚未确认。如果您已付款，请稍等一分钟后再检查。", es: "El pago aún no está confirmado. Si ya pagó, espere un minuto y compruebe de nuevo." },
   paidOk:     { en: "Payment confirmed — thank you!", ar: "تم تأكيد الدفع — شكرًا لك!", ru: "Оплата подтверждена — спасибо!", zh: "付款已确认，谢谢！", es: "Pago confirmado: ¡gracias!" },
+  opening:    { en: "Opening secure checkout…", ar: "جارٍ فتح صفحة الدفع الآمن…", ru: "Открываем безопасную оплату…", zh: "正在打开安全支付页面…", es: "Abriendo el pago seguro…" },
+  waitingTab: { en: "Finish the payment on the Lemon Squeezy page. This window unlocks by itself once the payment is confirmed.", ar: "أكمل الدفع في صفحة Lemon Squeezy. ستُفتح هذه النافذة تلقائيًا بعد تأكيد الدفع.", ru: "Завершите оплату на странице Lemon Squeezy. Это окно разблокируется само после подтверждения оплаты.", zh: "请在 Lemon Squeezy 页面完成付款。付款确认后，此窗口将自动解锁。", es: "Complete el pago en la página de Lemon Squeezy. Esta ventana se desbloquea sola cuando se confirme el pago." },
+  reopen:     { en: "Open the checkout again", ar: "افتح صفحة الدفع مرة أخرى", ru: "Открыть оплату снова", zh: "重新打开支付页面", es: "Abrir el pago de nuevo" },
+  paidBody:   { en: "Your Pro plan is active — unlimited optimizations are unlocked.", ar: "اشتراك Pro فعّال — التحسين بلا حدود متاح الآن.", ru: "Подписка Pro активна — неограниченные расчёты доступны.", zh: "Pro 订阅已生效 — 已解锁无限次优化。", es: "Su plan Pro está activo: optimizaciones ilimitadas desbloqueadas." },
   backPlans:  { en: "Back to plans", ar: "رجوع إلى الاشتراكات", ru: "Назад к тарифам", zh: "返回套餐", es: "Volver a los planes" },
   testMode:   { en: "Test mode: sign-in & payment — this browser only", ar: "وضع الاختبار: الدخول والدفع — لهذا المتصفح فقط", ru: "Тестовый режим: вход и оплата — только этот браузер", zh: "测试模式：登录与支付 — 仅此浏览器", es: "Modo de prueba: acceso y pago, solo este navegador" },
   testCard:   { en: "Lemon Squeezy test mode: card 4242 4242 4242 4242, any future date, any CVC.", ar: "في وضع الاختبار في Lemon Squeezy: البطاقة 4242 4242 4242 4242، أي تاريخ مستقبلي، أي CVC.", ru: "Тестовый режим Lemon Squeezy: карта 4242 4242 4242 4242, любая будущая дата, любой CVC.", zh: "Lemon Squeezy 测试模式：卡号 4242 4242 4242 4242，任意未来日期，任意 CVC。", es: "Modo de prueba de Lemon Squeezy: tarjeta 4242 4242 4242 4242, cualquier fecha futura, cualquier CVC." },
@@ -6809,6 +6832,25 @@ function soLoadLemon() {
   });
   return _soLemon;
 }
+function soCloseLemon() {   // release k: close the checkout overlay once the plan is confirmed
+  try { const LS = window.LemonSqueezy; if (LS && LS.Url && typeof LS.Url.Close === "function") LS.Url.Close(); } catch { /* ignore */ }
+}
+/* release l: the checkout page opens in a new tab. The tab must open inside the customer's tap (Safari
+   blocks a tab opened after any wait), so it opens blank at once and gets its address a moment later. */
+function soOpenTab(text) {
+  let w = null;
+  try { w = window.open("", "_blank"); } catch { w = null; }
+  if (!w) return null;
+  try { w.opener = null; } catch { /* ignore */ }          // the checkout page gets no handle on this tab
+  try {
+    w.document.title = "Steel Optimizer";
+    const b = w.document.body;
+    if (b) { b.style.cssText = "margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b111c;color:#cbd5e1;font:18px system-ui,sans-serif"; b.textContent = text; }
+  } catch { /* ignore */ }
+  return w;
+}
+function soSendTab(w, url) { try { if (w && !w.closed) { w.location.href = url; return true; } } catch { /* ignore */ } return false; }
+function soCloseTab(w) { try { if (w && !w.closed) w.close(); } catch { /* ignore */ } }
 const soFmtDate = d => { try { return new Date(d).toLocaleDateString(soDateLoc("en-GB"), { day: "numeric", month: "short", year: "numeric" }); } catch { return String(d).slice(0, 10); } };
 
 /* ── the gate: every ⚡ Optimize button calls this ── */
@@ -6827,14 +6869,23 @@ function SoMemberHost() {
   const [email, setEmail] = useState(""), [pass, setPass] = useState(""), [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false), [err, setErr] = useState(""), [msg, setMsg] = useState(""), [canResend, setCanResend] = useState(false);
   const [cool, setCool] = useState(0), [pick, setPick] = useState("y");
-  const pending = useRef(null), poll = useRef(null), coolT = useRef(null), viewRef = useRef(null);
+  const [co, setCo] = useState(null);           // page checkout: { url, blocked }
+  const pending = useRef(null), poll = useRef(null), coolT = useRef(null), viewRef = useRef(null), ret = useRef(null);
   viewRef.current = view;
-  const stopPoll = () => { if (poll.current) { clearInterval(poll.current); poll.current = null; } };
+  const stopPoll = () => { if (poll.current) { clearInterval(poll.current); poll.current = null; } if (ret.current) { ret.current(); ret.current = null; } };
   const clear = () => { setErr(""); setMsg(""); setCanResend(false); };
   const setV = v => { if (v && !soNav.route.ov) soNavGo({ ov: true }); setView(v); };   // the window is one Back step
   const go = v => { clear(); setV(v); };
   const rawClose = () => { stopPoll(); pending.current = null; setView(null); clear(); };
   const finish = () => { stopPoll(); const p = pending.current; pending.current = null; clear(); soNavCloseOverlay(() => { setView(null); if (p && p.action) p.action(); }); };
+  // release l: this tab is back from the checkout page - confirm the plan here (the webhook can take a few seconds)
+  const confirmPaid = k => soLoadPlan().then(m => {
+    if (k > 0 && !viewRef.current) return;                 // closed by the customer: stop looking
+    if (soHasPlan(m)) { clear(); setV("paid"); return; }
+    if (k === 0) setV("check");
+    if (k < 14) setTimeout(() => confirmPaid(k + 1), 1500);
+    else { setErr(L("notYet")); setV("wait"); }
+  }).catch(() => {});
   const afterAuth = async () => {
     const p = pending.current;
     if (!p) { setView(null); return; }
@@ -6860,6 +6911,20 @@ function SoMemberHost() {
   useEffect(() => {
     if (!MEMBERSHIP_ON) return undefined;
     soPayTest();                                   // remember ?paytest=1 / ?paytest=0
+    // release l: back from Lemon Squeezy's checkout page (its confirmation button links to /?paid=1)
+    let paidBack = false;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get("paid") === "1") {
+        q.delete("paid"); const qs = q.toString();
+        window.history.replaceState(window.history.state, "", window.location.pathname + (qs ? "?" + qs : "") + window.location.hash);
+        if (PAYMENTS_ENABLED && soLoginOn()) {
+          paidBack = true;
+          // the checkout tab this app opened: close it, the first tab unlocks by itself (browsers close only script-opened tabs this way)
+          if (window.history.length > 1) { try { window.close(); } catch { /* ignore */ } }
+        }
+      }
+    } catch { /* ignore */ }
     // links from Supabase e-mails: #access_token=…&type=signup|recovery   or   #error=…&error_code=otp_expired
     try {
       const h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
@@ -6875,7 +6940,11 @@ function SoMemberHost() {
         clean(); setErr(soMT(lang, "linkBad")); setCanResend(true); setV("in");
       }
     } catch { /* ignore */ }
-    soSession().then(s => { if (s) soLoadPlan(); });
+    soSession().then(s => {
+      if (!s) return;
+      if (!paidBack) { soLoadPlan(); return; }
+      setTimeout(() => confirmPaid(0), 400);         // if window.close() worked, this tab is gone before this runs
+    });
     return () => { stopPoll(); if (coolT.current) clearInterval(coolT.current); };
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!MEMBERSHIP_ON || !view) return null;
@@ -6927,24 +6996,51 @@ function SoMemberHost() {
     await soApi("/auth/v1/user", { body: { password: pass }, token: s.access_token, method: "PUT" });
     setPass(""); if (pending.current) await afterAuth(); else soNavCloseOverlay(() => setView(null));
   }, "reset");
-  const checkNow = async () => { setBusy(true); const m = await soLoadPlan(); setBusy(false); if (soHasPlan(m)) { setMsg(L("paidOk")); setTimeout(finish, 900); } else setErr(L("notYet")); };
-  const pay = plan => run(async () => {
-    const s = await soSession(); if (!s) { setV("in"); return; }
-    const link = plan === "y" ? MEMBERSHIP.checkoutYearly : MEMBERSHIP.checkoutMonthly;
-    const u = new URL(link);
-    u.searchParams.set("checkout[email]", s.user.email || email.trim());
-    u.searchParams.set("checkout[custom][user_id]", s.user.id);
-    setV("wait");
-    stopPoll(); let n = 0;
-    const done = () => { stopPoll(); setMsg(L("paidOk")); setTimeout(finish, 900); };
-    poll.current = setInterval(async () => { n++; const m = await soLoadPlan(); if (soHasPlan(m)) done(); else if (n >= 90) stopPoll(); }, 4000);
-    try {
-      const LS = await soLoadLemon();
-      try { LS.Setup({ eventHandler: e => { if (e && e.event === "Checkout.Success") soLoadPlan().then(m => { if (soHasPlan(m)) done(); }); } }); } catch { /* ignore */ }
-      u.searchParams.set("embed", "1");
-      LS.Url.Open(u.toString());
-    } catch { window.open(u.toString(), "_blank", "noopener"); }
-  }, "checkout");
+  const checkNow = async () => { setBusy(true); const m = await soLoadPlan(); setBusy(false); if (soHasPlan(m)) { soCloseLemon(); setMsg(L("paidOk")); setTimeout(finish, 900); } else setErr(L("notYet")); };
+  const pay = plan => {
+    const tab = CHECKOUT_PAGE_ENABLED ? soOpenTab(L("opening")) : null;   // page checkout: the tab opens now, inside the tap
+    let sent = false;
+    return run(async () => {
+      try {
+        const s = await soSession(); if (!s) { setV("in"); return; }
+        const link = plan === "y" ? MEMBERSHIP.checkoutYearly : MEMBERSHIP.checkoutMonthly;
+        const u = new URL(link);
+        u.searchParams.set("checkout[email]", s.user.email || email.trim());
+        u.searchParams.set("checkout[custom][user_id]", s.user.id);
+        setV("wait");
+        stopPoll(); let n = 0, fired = false, qOn = false;
+        // once only: the 4 s poll and Checkout.Success can both find the plan; two finish() calls close together could step the browser Back twice
+        const done = () => { if (fired) return; fired = true; stopPoll(); soCloseLemon(); setMsg(L("paidOk")); setTimeout(finish, 900); };
+        poll.current = setInterval(async () => { n++; const m = await soLoadPlan(); if (soHasPlan(m)) done(); else if (n >= 90 && poll.current) { clearInterval(poll.current); poll.current = null; } }, 4000);
+        // right after payment the webhook needs a few seconds: look every 1.5 s for about 18 s (the 4 s poll carries on after that)
+        const quick = k => {
+          if (fired || (k === 0 && qOn)) return;
+          qOn = true;
+          soLoadPlan().then(m => {
+            if (soHasPlan(m)) { qOn = false; done(); }
+            else if (!fired && k < 12 && viewRef.current) setTimeout(() => quick(k + 1), 1500);
+            else qOn = false;
+          }).catch(() => { qOn = false; });
+        };
+        if (CHECKOUT_PAGE_ENABLED) {
+          const url = u.toString();
+          sent = soSendTab(tab, url);
+          setCo({ url, blocked: !sent });              // blocked: the window shows a plain link instead (a tapped link always opens)
+          // phones pause background tabs: check the moment the customer is back on this tab
+          const back = () => { if (document.visibilityState === "visible") quick(0); };
+          document.addEventListener("visibilitychange", back); window.addEventListener("focus", back);
+          ret.current = () => { document.removeEventListener("visibilitychange", back); window.removeEventListener("focus", back); };
+          return;
+        }
+        try {
+          const LS = await soLoadLemon();
+          try { LS.Setup({ eventHandler: e => { if (e && e.event === "Checkout.Success") quick(0); } }); } catch { /* ignore */ }
+          u.searchParams.set("embed", "1");
+          LS.Url.Open(u.toString());
+        } catch { window.open(u.toString(), "_blank", "noopener"); }
+      } finally { if (tab && !sent) soCloseTab(tab); }     // no session, or an error: don't leave a blank tab behind
+    }, "checkout");
+  };
   const close = () => soNavBackTo({ ov: false }, rawClose);                          // ✕, click outside, Continue
 
   const ACC = "#fbbf24";
@@ -6956,7 +7052,7 @@ function SoMemberHost() {
   const s = mem.session;
   const test = soPayTest() && (MEMBERSHIP.loginFor === "tester" || MEMBERSHIP.payFor === "tester");
   const title = view === "up" ? L("titleUp") : view === "sent" ? L("sentTitle") : view === "activated" ? L("actTitle") : view === "forgot" ? L("forgot")
-    : view === "reset" ? L("newPass") : view === "pay" || view === "wait" ? L("payTitle") : view === "check" ? L("checking") : L("titleIn");
+    : view === "reset" ? L("newPass") : view === "pay" || view === "wait" ? L("payTitle") : view === "check" ? L("checking") : view === "paid" ? L("paidOk") : L("titleIn");
   const passField = (auto, hint) => (
     <label style={LBL}>{L("password")}
       <div style={{ position: "relative" }}>
@@ -6983,7 +7079,7 @@ function SoMemberHost() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
             <div style={{ fontSize: 14, letterSpacing: 2, color: ACC, fontWeight: 800 }}>STEEL OPTIMIZER</div>
-            <div style={{ fontSize: 29, fontWeight: 800, color: "#f8fafc", marginTop: 6, lineHeight: 1.2 }}>{view === "sent" ? "📧 " : view === "activated" ? "✅ " : ""}{title}</div>
+            <div style={{ fontSize: 29, fontWeight: 800, color: "#f8fafc", marginTop: 6, lineHeight: 1.2 }}>{view === "sent" ? "📧 " : view === "activated" || view === "paid" ? "✅ " : ""}{title}</div>
           </div>
           <button onClick={close} aria-label={L("close")} style={{ background: "none", border: "1px solid #243044", color: "#94a3b8", borderRadius: 10, width: 38, height: 38, cursor: "pointer", fontSize: 18, flex: "none" }}>✕</button>
         </div>
@@ -7017,6 +7113,10 @@ function SoMemberHost() {
           <div style={{ fontSize: 18, color: "#e2e8f0", marginTop: 12 }}>{L("actBody", { email: (s && s.user && s.user.email) || "" })}</div>
           <button onClick={close} style={BTN}>{L("continue")}</button>
         </>)}
+        {view === "paid" && (<>
+          <div style={{ fontSize: 18, color: "#e2e8f0", marginTop: 12 }}>{L("paidBody")}</div>
+          <button onClick={close} style={BTN}>{L("continue")}</button>
+        </>)}
 
         {view === "reset" && (
           <form onSubmit={e => { e.preventDefault(); if (!busy) savePass(); }}>
@@ -7036,16 +7136,22 @@ function SoMemberHost() {
           </div>
           <button disabled={busy} onClick={() => pay(pick)} style={BTN}>{busy ? "…" : "🔒 " + L("choose")}</button>
           <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {["Visa", "Mastercard", "Amex", "Apple Pay", "Google Pay", "PayPal"].map(b => <span key={b} style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid #243044", background: "#0a0f18", fontSize: 14.5, color: "#cbd5e1", fontWeight: 700 }}>{b}</span>)}
+            {SO_PAY_BADGES.map(b => <span key={b} style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid #243044", background: "#0a0f18", fontSize: 14.5, color: "#cbd5e1", fontWeight: 700 }}>{b}</span>)}
           </div>
           <div style={{ marginTop: 12, fontSize: 15, color: "#64748b" }}>{L("secure")}</div>
           {test && <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 9, background: "rgba(56,189,248,.1)", border: "1px dashed rgba(56,189,248,.5)", color: "#7dd3fc", fontSize: 15 }}>🧪 {L("testCard")}</div>}
         </>)}
         {view === "wait" && (<>
           <div style={{ marginTop: 18, fontSize: 18, color: "#cbd5e1" }}>⏳ {L("waiting")}</div>
-          <div style={{ marginTop: 8, fontSize: 16, color: "#94a3b8" }}>{L("waitingTip")}</div>
-          <button disabled={busy} onClick={checkNow} style={BTN}>{busy ? "…" : L("checkAgain")}</button>
-          <div style={{ marginTop: 14 }}><button onClick={() => { clear(); stopPoll(); setV("pay"); }} style={LINK}>{L("backPlans")}</button></div>
+          <div style={{ marginTop: 8, fontSize: 16, color: "#94a3b8" }}>{L(CHECKOUT_PAGE_ENABLED ? "waitingTab" : "waitingTip")}</div>
+          {CHECKOUT_PAGE_ENABLED && co && co.blocked && (
+            <a href={co.url} target="_blank" rel="noopener" onClick={() => setCo({ ...co, blocked: false })}
+               style={{ ...BTN, display: "block", textAlign: "center", textDecoration: "none", boxSizing: "border-box" }}>🔒 {L("choose")}</a>)}
+          <button disabled={busy} onClick={checkNow} style={CHECKOUT_PAGE_ENABLED && co && co.blocked ? BTN2 : BTN}>{busy ? "…" : L("checkAgain")}</button>
+          <div style={{ marginTop: 14, display: "flex", gap: 18, flexWrap: "wrap" }}>
+            {CHECKOUT_PAGE_ENABLED && co && !co.blocked && <a href={co.url} target="_blank" rel="noopener" style={LINK}>{L("reopen")}</a>}
+            <button onClick={() => { clear(); stopPoll(); setV("pay"); }} style={LINK}>{L("backPlans")}</button>
+          </div>
         </>)}
         {s && s.user && s.user.email && (view === "pay" || view === "wait" || view === "check" || view === "reset") && (
           <div style={{ marginTop: 20, paddingTop: 14, borderTop: "1px solid #1e293b", display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", fontSize: 15, color: "#64748b" }}>
