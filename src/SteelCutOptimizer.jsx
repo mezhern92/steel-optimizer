@@ -89,28 +89,54 @@ const SO_DEMO_PLATES = "500x300x12x4|380x250x12x6|600x400x20x3|280x180x8x8";
 function soIsDemoPlates(parts) {
   try { return (parts || []).map(p => `${+p.length}x${+p.width}x${+p.thickness}x${+p.qty}`).join("|") === SO_DEMO_PLATES; } catch { return false; }
 }
-const SO_BUILD = "2026-10-02n";   // sent with every usage alert → shows which version is live
+const SO_BUILD = "2026-10-02o";   // sent with every usage alert → shows which version is live
+// Release o: every alert keeps going to Formspree before and after the paid launch (owner's choice).
+// Problem alerts (sign-in/e-mail/service problems, "PAID BUT NOT UNLOCKED") are never held back by the
+// per-page cap. Note: Formspree Free = 50 submissions a month in total; with paying customers the routine
+// usage alerts can use that up, so watch Formspree's 50/75/90 % warning e-mails and upgrade when they come.
+const SO_ALERT_KEY_EVENTS = /^(MEMBERSHIP |PAID BUT NOT UNLOCKED)/;
+/* Release o: anonymous return-visit counter, kept only in this browser (no cookie, nothing personal).
+   A new visit = the page opened more than 30 minutes after the previous one. Every usage e-mail
+   carries it, and its subject says "visit N" from the second visit on, so returning users stand out. */
+const SO_VISIT_KEY = "steelopt_visits_v1";
+let _soVisit = null;
+function soVisit() {
+  if (_soVisit) return _soVisit;
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(SO_VISIT_KEY) || "null"); } catch { v = null; }
+  const now = Date.now();
+  if (!v || !(v.first > 0)) v = { first: now, last: 0, n: 0 };
+  const prev = v.last;
+  if (!prev || now - prev > 30 * 60000) v.n = (v.n || 0) + 1;
+  v.last = now;
+  try { localStorage.setItem(SO_VISIT_KEY, JSON.stringify(v)); } catch { /* private mode: every visit looks new */ }
+  const day = 86400000;
+  _soVisit = { visit: v.n, firstSeenDays: Math.floor((now - v.first) / day), prevVisitDaysAgo: prev ? Math.floor((now - prev) / day) : null };
+  return _soVisit;
+}
+if (typeof window !== "undefined") { try { soVisit(); } catch { /* never block the app */ } }
 function alertMe(what, detail) {
-  if (!ALERT_ME_ON_USE || typeof window === "undefined") return;
-  if (_alertCount >= 20) return;                       // cap per session
+  if (!ALERT_ME_ON_USE || typeof window === "undefined") return null;
+  if (_alertCount >= 20 && !SO_ALERT_KEY_EVENTS.test(String(what))) return null;   // cap per session (problem alerts always go)
   _alertCount++;
   try {
-    fetch("https://formspree.io/f/" + ALERT_FORM_ID, {
+    return fetch("https://formspree.io/f/" + ALERT_FORM_ID, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         email: "usage@steeloptimizer.com",             // so Formspree accepts it
-        _subject: "Steel Optimizer — " + what,
+        _subject: "Steel Optimizer — " + what + (soVisit().visit > 1 ? " · visit " + soVisit().visit : ""),
         event: what,
         detail: detail || {},
+        visitor: soVisit(),
         referrer: document.referrer || "direct",
         language: navigator.language || "",
         screen: window.innerWidth + "x" + window.innerHeight,
         at: new Date().toISOString(),
         ver: SO_BUILD,
       }),
-    }).catch(() => {});
-  } catch { /* never block the app */ }
+    }).catch(() => null);                              // resolves to the response (or null): callers may check .ok
+  } catch { return null; /* never block the app */ }
 }
 
 /* One call site for every event. Never throws — analytics must never be able
@@ -776,7 +802,8 @@ function ModuleChooser({ onPick }) {
   const t = useT();
   return (
     <div>
-      <EarlyAccessNotice />
+      {/* release o: before launch visitors keep the early-access notice; once paid (or for the owner's ?paytest=1 preview) the prices show instead */}
+      {soPaywallOn() ? <SoProNotice /> : SO_LAUNCHED ? null : <EarlyAccessNotice />}
       <SectionTitle>{t("chooseWhat")}</SectionTitle>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 20, marginTop: 18 }}>
         <Chooser icon="🅸" titleKey="modSections" descKey="modSectionsDesc" onClick={() => onPick("sections")} />
@@ -1578,6 +1605,7 @@ function PlateResults({ results, colorMap, material, reuseMin, pricing, onBack }
           {results.totals.offcutCount > 0 && <button onClick={() => requestDownload(() => exportOffcutExcel(results, material, reuseMin, t))} style={{ ...EXP, background: "linear-gradient(135deg,#10b981,#059669)", color: "#04140d" }}>{t("dlLeftXLS")}</button>}
         </div>
       </Card>
+      <SoResultFeedback mod="plates" stats={{ parts: results.totals.parts, sheets: results.totals.sheets, thicknesses: results.groups.length, waste: wastePct }} />
       <ProcurementBlock results={results} material={material} />
     </>
   );
@@ -5701,12 +5729,184 @@ function ContactFooter() {
           </div>
         )}
 
+        {(FEEDBACK_ENABLED || SHARE_ENABLED) && (
+          <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            {FEEDBACK_ENABLED && <SoFeedback kind="general" />}
+            {SHARE_ENABLED && <SoShare via="footer" />}
+          </div>
+        )}
+
         <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(148,163,184,.12)", fontSize: 13.5, color: "#64748b", lineHeight: 1.7 }}>
           {t("ctBlocked")}
         </div>
         <div style={{ marginTop: 10, fontSize: 13.5 }}><SoPrivLink style={{ color: "#64748b" }} /></div>
         <div style={{ marginTop: 12, fontSize: 13.5, color: "#475569" }}>{t("ctBy")}</div>
       </div>
+    </div>
+  );
+}
+
+/* ╔══ FEEDBACK + SHARE WITH A COLLEAGUE (release o, isolated add-on) ═══════════╗
+   Under every result: "Was this result useful? Useful / Not really" (opens a short form) and
+   "Share with a colleague". In the footer: "Send feedback" and the same share button.
+   Feedback goes to /api/feedback (Vercel → Resend → the owner's inbox, set in Vercel as
+   FEEDBACK_TO), so it never uses the Formspree quota; if that fails it goes to Formspree,
+   and if that fails too the visitor is shown the support address. Sent: the message, the
+   optional e-mail, the rating and app context (language, version, result counts) — never
+   file names or contents.
+   Share: the phone's own share sheet (WhatsApp, LinkedIn, e-mail…) where the browser has
+   one; otherwise WhatsApp / LinkedIn / e-mail / copy link. The link opens the site in the
+   sharer's language and carries ?ref=share.
+╚══════════════════════════════════════════════════════════════════════════════╝ */
+const FEEDBACK_ENABLED = true;   // ◄ false = no feedback strip or footer button
+const SHARE_ENABLED = true;      // ◄ false = no "Share with a colleague" buttons
+const SO_SHARE_URL = "https://steeloptimizer.com/";
+const SO_FB = {
+  ask:    { en: "Was this result useful?", ar: "هل كانت النتيجة مفيدة؟", ru: "Результат оказался полезным?", zh: "这个结果有用吗？", es: "¿Le resultó útil este resultado?" },
+  yes:    { en: "Useful", ar: "مفيدة", ru: "Да, полезно", zh: "有用", es: "Sí, útil" },
+  no:     { en: "Not really", ar: "ليس تمامًا", ru: "Не очень", zh: "不太有用", es: "No mucho" },
+  btn:    { en: "Send feedback", ar: "أرسل ملاحظاتك", ru: "Написать отзыв", zh: "发送反馈", es: "Enviar comentarios" },
+  phUp:   { en: "What worked well? (optional)", ar: "ما الذي أعجبك؟ (اختياري)", ru: "Что понравилось? (необязательно)", zh: "哪些地方好用？（可选）", es: "¿Qué funcionó bien? (opcional)" },
+  phDown: { en: "What went wrong, or what should we improve?", ar: "ما المشكلة، أو ما الذي نحسّنه؟", ru: "Что пошло не так или что улучшить?", zh: "哪里有问题，或者我们该改进什么？", es: "¿Qué salió mal o qué deberíamos mejorar?" },
+  ph:     { en: "Your idea, problem or question…", ar: "فكرتك أو مشكلتك أو سؤالك…", ru: "Ваша идея, проблема или вопрос…", zh: "您的想法、问题或疑问…", es: "Su idea, problema o pregunta…" },
+  email:  { en: "Your email (optional, if you'd like a reply)", ar: "بريدك (اختياري، إن أردت ردًّا)", ru: "Ваш e-mail (необязательно, если ждёте ответа)", zh: "您的邮箱（可选，如需回复）", es: "Su correo (opcional, si desea respuesta)" },
+  send:   { en: "Send", ar: "إرسال", ru: "Отправить", zh: "发送", es: "Enviar" },
+  cancel: { en: "Cancel", ar: "إلغاء", ru: "Отмена", zh: "取消", es: "Cancelar" },
+  thanks: { en: "Thank you — I read every message.", ar: "شكرًا لك — أقرأ كل رسالة.", ru: "Спасибо — я читаю каждое сообщение.", zh: "谢谢！每条留言我都会看。", es: "Gracias: leo cada mensaje." },
+  need:   { en: "Write a few words first.", ar: "اكتب بضع كلمات أولًا.", ru: "Сначала напишите пару слов.", zh: "请先写几句话。", es: "Escriba unas palabras primero." },
+  badMail:{ en: "Check the email address, or leave it empty.", ar: "تحقّق من البريد أو اتركه فارغًا.", ru: "Проверьте адрес e-mail или оставьте поле пустым.", zh: "请检查邮箱地址，或留空。", es: "Revise el correo o déjelo vacío." },
+  fail:   { en: "Couldn't send right now. Please email {mail}", ar: "تعذّر الإرسال الآن. راسلنا على {mail}", ru: "Сейчас не удалось отправить. Напишите на {mail}", zh: "暂时无法发送，请发邮件至 {mail}", es: "No se pudo enviar ahora. Escríbanos a {mail}" },
+  share:  { en: "Share with a colleague", ar: "شاركه مع زميل", ru: "Поделиться с коллегой", zh: "分享给同事", es: "Compartir con un colega" },
+  shareText: { en: "Steel Optimizer turns an Excel or Tekla material list into a cutting plan, the bars and sheets to buy and the waste, in seconds:",
+               ar: "Steel Optimizer يحوّل قائمة مواد Excel أو Tekla إلى خطة قص وكميات الشراء ونسبة الهدر خلال ثوانٍ:",
+               ru: "Steel Optimizer за секунды превращает ведомость из Excel или Tekla в карту раскроя, список закупки и процент отходов:",
+               zh: "Steel Optimizer 几秒钟就能把 Excel 或 Tekla 材料清单变成切割方案、采购清单和损耗率：",
+               es: "Steel Optimizer convierte una lista de materiales de Excel o Tekla en un plan de corte, las barras y chapas a comprar y el desperdicio, en segundos:" },
+  subj:   { en: "A tool for steel cutting lists", ar: "أداة لقوائم قص الحديد", ru: "Инструмент для раскроя металла", zh: "钢材下料工具", es: "Una herramienta para listas de corte de acero" },
+  copy:   { en: "Copy link", ar: "نسخ الرابط", ru: "Копировать ссылку", zh: "复制链接", es: "Copiar enlace" },
+  copied: { en: "Link copied", ar: "تم نسخ الرابط", ru: "Ссылка скопирована", zh: "链接已复制", es: "Enlace copiado" },
+  mail:   { en: "Email", ar: "البريد", ru: "E-mail", zh: "邮件", es: "Correo" },
+};
+const soFb = (lang, k, vars) => { const e = SO_FB[k]; let s = e ? (e[lang] != null ? e[lang] : e.en) : k; if (vars) for (const v in vars) s = s.replace("{" + v + "}", vars[v]); return s; };
+const SO_FB_BTN = { display: "inline-flex", alignItems: "center", gap: 7, padding: "10px 16px", borderRadius: 8, fontSize: 15, fontWeight: 600,
+  fontFamily: "'Space Mono', monospace", cursor: "pointer", background: "transparent", border: "1px solid #334155", color: "#cbd5e1", whiteSpace: "nowrap", textDecoration: "none" };
+
+async function soSendFeedback(p) {
+  try {                                           // 1) our own function → Resend → the owner's inbox
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 9000);
+    const r = await fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p), signal: ctl.signal });
+    clearTimeout(tm);
+    if (r.ok) return true;
+  } catch { /* try the fallback */ }
+  try {                                           // 2) fallback: the Formspree form the alerts use
+    const r = await fetch("https://formspree.io/f/" + ALERT_FORM_ID, {
+      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ email: p.email || "feedback@steeloptimizer.com", _subject: "Steel Optimizer — FEEDBACK" + (p.rating === "down" ? " (not useful)" : p.rating === "up" ? " (useful)" : ""),
+        event: "FEEDBACK", feedback: p.message, rating: p.rating || "", reply_to: p.email || "", detail: p.ctx || {}, at: new Date().toISOString(), ver: SO_BUILD }),
+    });
+    if (r.ok) return true;
+  } catch { /* ignore */ }
+  return false;
+}
+
+function SoFeedback({ kind = "general", mod = "", stats = null }) {
+  const { lang } = useLang();
+  const [open, setOpen] = useState(false), [rating, setRating] = useState(""), [msg, setMsg] = useState(""), [mail, setMail] = useState("");
+  const [busy, setBusy] = useState(false), [done, setDone] = useState(false), [err, setErr] = useState("");
+  const start = r => {
+    setRating(r); setErr(""); setOpen(true);
+    if (!mail) { let m = ""; try { m = (soMem.session && soMem.session.user && soMem.session.user.email) || localStorage.getItem("steelopt_email_v2") || ""; } catch { /* private mode */ } setMail(m); }
+    track("feedback_open", { kind, rating: r || "" });
+  };
+  const send = async () => {
+    const text = msg.trim(), em = mail.trim();
+    if (!text && !rating) { setErr(soFb(lang, "need")); return; }
+    if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(em)) { setErr(soFb(lang, "badMail")); return; }
+    setBusy(true); setErr("");
+    let signed = 0, plan = 0;
+    try { signed = soMem.session && soMem.session.access_token ? 1 : 0; plan = soHasPlan(soMem.member) ? 1 : 0; } catch { /* ignore */ }
+    const ok = await soSendFeedback({ kind, rating, message: text.slice(0, 2000), email: em.slice(0, 200), hp: "",
+      ctx: { mod, lang, ver: SO_BUILD, signed, plan, launched: SO_LAUNCHED ? 1 : 0, visit: soVisit().visit, screen: window.innerWidth + "x" + window.innerHeight, ...(stats || {}) } });
+    setBusy(false);
+    if (ok) { setDone(true); setOpen(false); track("feedback_sent", { kind, rating: rating || "" }); }
+    else setErr(soFb(lang, "fail", { mail: CONTACT.email || "support@steeloptimizer.com" }));
+  };
+  const BTN = SO_FB_BTN;
+  const on = r => rating === r && open;
+  if (done) return <span role="status" style={{ fontSize: 15, color: "#6ee7b7", padding: "10px 4px" }}>✓ {soFb(lang, "thanks")}</span>;
+  return (
+    <>
+      {kind === "result" ? (
+        <>
+          <span style={{ fontSize: 15.5, color: "#cbd5e1", fontWeight: 600 }}>{soFb(lang, "ask")}</span>
+          <button type="button" onClick={() => start("up")} aria-pressed={on("up")} style={{ ...BTN, ...(on("up") ? { borderColor: "#10b981", color: "#6ee7b7", background: "rgba(16,185,129,.1)" } : {}) }}>👍 {soFb(lang, "yes")}</button>
+          <button type="button" onClick={() => start("down")} aria-pressed={on("down")} style={{ ...BTN, ...(on("down") ? { borderColor: "#f87171", color: "#fca5a5", background: "rgba(239,68,68,.1)" } : {}) }}>👎 {soFb(lang, "no")}</button>
+        </>
+      ) : (
+        <button type="button" onClick={() => (open ? setOpen(false) : start(""))} aria-expanded={open} style={BTN}>💬 {soFb(lang, "btn")}</button>
+      )}
+      {open && (
+        <div style={{ flexBasis: "100%", width: "100%", marginTop: 4, display: "grid", gap: 8 }}>
+          <textarea value={msg} onChange={e => setMsg(e.target.value)} maxLength={2000} rows={3} autoFocus
+            placeholder={soFb(lang, rating === "up" ? "phUp" : rating === "down" ? "phDown" : "ph")}
+            style={{ width: "100%", boxSizing: "border-box", resize: "vertical", minHeight: 80, padding: "10px 12px", borderRadius: 8, background: "#0a0f18", border: "1px solid #2d3748", color: "#e2e8f0", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
+          <input type="email" value={mail} onChange={e => setMail(e.target.value)} maxLength={200} dir={mail ? "ltr" : undefined} autoComplete="email"
+            placeholder={soFb(lang, "email")} aria-label={soFb(lang, "email")}
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 8, background: "#0a0f18", border: "1px solid #2d3748", color: "#e2e8f0", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
+          {err && <div role="alert" style={{ fontSize: 14.5, color: "#fca5a5" }}>{err}</div>}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <button type="button" onClick={send} disabled={busy} style={{ ...BTN, background: busy ? "rgba(120,80,10,.45)" : "linear-gradient(135deg,#f59e0b,#d97706)", color: "#1a1206", border: "none", fontWeight: 800 }}>{busy ? "…" : soFb(lang, "send")}</button>
+            <button type="button" onClick={() => { setOpen(false); setErr(""); }} style={{ ...BTN, border: "none", color: "#94a3b8" }}>{soFb(lang, "cancel")}</button>
+            <span style={{ fontSize: 13 }}><SoPrivLink /></span>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function SoShare({ via }) {
+  const { lang } = useLang();
+  const [menu, setMenu] = useState(false), [copied, setCopied] = useState(false);
+  const url = SO_SHARE_URL + "?" + (lang !== "en" ? "lang=" + lang + "&" : "") + "ref=share";
+  const text = soFb(lang, "shareText");
+  const click = async () => {
+    track("share_click", { via });
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try { await navigator.share({ title: "Steel Optimizer", text, url }); track("share_done", { via, how: "native" }); return; }
+      catch (e) { if (e && e.name === "AbortError") return; }   // closed by the user; any other error → the links below
+    }
+    setMenu(m => !m);
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text + " " + url); setCopied(true); setTimeout(() => setCopied(false), 2500); track("share_done", { via, how: "copy" }); }
+    catch { window.prompt(soFb(lang, "copy"), url); }
+  };
+  const LNK = { ...SO_FB_BTN, padding: "8px 12px", fontSize: 14 };
+  return (
+    <>
+      <button type="button" onClick={click} aria-expanded={menu} style={SO_FB_BTN}>↗ {soFb(lang, "share")}</button>
+      {menu && (
+        <div style={{ flexBasis: "100%", display: "flex", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+          <a href={"https://wa.me/?text=" + encodeURIComponent(text + " " + url)} target="_blank" rel="noopener noreferrer" onClick={() => track("share_done", { via, how: "whatsapp" })} style={{ ...LNK, borderColor: "rgba(37,211,102,.5)", color: "#86efac" }}>WhatsApp</a>
+          <a href={"https://www.linkedin.com/sharing/share-offsite/?url=" + encodeURIComponent(url)} target="_blank" rel="noopener noreferrer" onClick={() => track("share_done", { via, how: "linkedin" })} style={{ ...LNK, borderColor: "rgba(10,102,194,.6)", color: "#93c5fd" }}>LinkedIn</a>
+          <a href={"mailto:?subject=" + encodeURIComponent(soFb(lang, "subj")) + "&body=" + encodeURIComponent(text + "\n\n" + url)} onClick={() => track("share_done", { via, how: "email" })} style={LNK}>✉ {soFb(lang, "mail")}</a>
+          <button type="button" onClick={copy} style={LNK}>{copied ? "✓ " + soFb(lang, "copied") : "🔗 " + soFb(lang, "copy")}</button>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* the strip under a result: feedback + share */
+function SoResultFeedback({ mod, stats, style }) {
+  if (!FEEDBACK_ENABLED && !SHARE_ENABLED) return null;
+  return (
+    <div style={{ marginBottom: 28, padding: "16px 18px", borderRadius: 12, background: "rgba(19,25,32,.72)", border: "1px solid rgba(148,163,184,.14)",
+      display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", ...style }}>
+      {FEEDBACK_ENABLED && <SoFeedback kind="result" mod={mod} stats={stats} />}
+      {FEEDBACK_ENABLED && SHARE_ENABLED && <span aria-hidden="true" style={{ flex: "1 1 0", minWidth: 8 }} />}
+      {SHARE_ENABLED && <SoShare via={"result-" + mod} />}
     </div>
   );
 }
@@ -6105,6 +6305,7 @@ function SectionResults({ results, kerf, pricing, onBack }) {
           {hasLeftovers && <button onClick={() => requestDownload(() => exportSectionLeftoverExcel(results))} style={{ ...EXP, background: "linear-gradient(135deg,#10b981,#059669)", color: "#04140d" }}>{t("dlLeftXLS")}</button>}
         </div>
       </Card>
+      <SoResultFeedback mod="sections" style={{ marginTop: 20 }} stats={{ profiles: results.groups.length, bars: totalStock, waste: wastePct }} />
     </>
   );
 }
@@ -6605,18 +6806,37 @@ class ErrorBoundary extends Component {
    Owner test: open  steeloptimizer.com/?paytest=1  → this browser gets the full flow
              (sign up → activation e-mail → sign in → pay); a "test mode" badge shows;
              ?paytest=0 or the badge's Exit ends it. Visitors are not affected.
-   Go live:  loginFor / payFor below → "everyone".
+   Go live (release o): launch.json at the repo root, {"paid": false} → {"paid": true}, commit.
+             Nothing else: the build turns on sign-in + payment for everyone, the live checkout
+             link, the Pro notice and the paid home page. Back to false = free again.
 ──────────────────────────────────────────────────────────────────────────── */
+/* global __SO_LAUNCHED__ */
+// Set at build time by vite.config.js from launch.json. Missing or unreadable = false (the app stays free).
+const SO_LAUNCHED = typeof __SO_LAUNCHED__ !== "undefined" && __SO_LAUNCHED__ === true;
+const SO_CHECKOUT_TEST = "https://steeloptimizer.lemonsqueezy.com/checkout/buy/ad5dceed-4129-4221-a20e-f83e371f1f2f";   // Lemon Squeezy TEST mode (owner tests with card 4242)
+const SO_CHECKOUT_LIVE = "https://steeloptimizer.lemonsqueezy.com/checkout/buy/8da85f19-eb5a-4fc6-a577-90a7a3244d3f";   // Lemon Squeezy LIVE mode (real payments)
 const MEMBERSHIP = {
   supabaseUrl: "https://cjeqlypqoxiwnleimwlx.supabase.co",               // ◄ Supabase project URL
   supabaseAnonKey: "sb_publishable_neg7qIt_WHT67FgGweLc1A_V0lFd5yo",       // ◄ publishable (public) key — NEVER put the secret key here
-  checkoutMonthly: "https://steeloptimizer.lemonsqueezy.com/checkout/buy/ad5dceed-4129-4221-a20e-f83e371f1f2f",      // ◄ Lemon Squeezy → Products → monthly plan → Share → checkout link
-  checkoutYearly: "https://steeloptimizer.lemonsqueezy.com/checkout/buy/ad5dceed-4129-4221-a20e-f83e371f1f2f",   // one Lemon Squeezy link, both plans: the customer picks Monthly / Yearly in the checkout       // ◄ same for the yearly plan (empty = monthly only)
-  priceMonthly: "SAR 109",      // ◄ exactly as in Lemon Squeezy
-  priceYearly: "SAR 1,090",      // ◄ "2 months free" (≈ $24/month)
-  loginFor: "tester",       // ◄ who is asked to sign in at ⚡ Optimize: "tester" = only a browser opened with ?paytest=1 (visitors use the app as today) · "everyone"
-  payFor: "tester",         // ◄ who must pay at ⚡ Optimize:            "tester" = only a browser opened with ?paytest=1 · "everyone" · "nobody"
+  checkoutMonthly: SO_LAUNCHED ? SO_CHECKOUT_LIVE : SO_CHECKOUT_TEST,     // one Lemon Squeezy link, both plans: the customer picks Monthly / Yearly in the checkout
+  checkoutYearly: SO_LAUNCHED ? SO_CHECKOUT_LIVE : SO_CHECKOUT_TEST,      // (empty = monthly only)
+  // prices: SO_PRICE_USD below (the plans window and the Pro notice read them from there)
+  loginFor: SO_LAUNCHED ? "everyone" : "tester",   // who is asked to sign in at ⚡ Optimize: "tester" = only a browser opened with ?paytest=1 (visitors use the app as today) · "everyone"
+  payFor: SO_LAUNCHED ? "everyone" : "tester",     // who must pay at ⚡ Optimize:            "tester" = only a browser opened with ?paytest=1 · "everyone" · "nobody"
 };
+/* Release o: prices. Lemon Squeezy's store is in US dollars and charges every card in US dollars;
+   prices include tax (store setting "Tax-inclusive pricing"). Visitors in Saudi Arabia (time zone
+   Asia/Riyadh) see riyals first, at the fixed 3.75 peg, with the dollar amount they will be charged. */
+const SO_PRICE_USD = { m: 29, y: 290 };      // ◄ must match the Lemon Squeezy product: monthly 29, yearly 290 ("2 months free", ≈ $24/month)
+const SO_SAR_PER_USD = 3.75;
+function soIsSaudi() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Riyadh"; } catch { return false; }
+}
+function soPrice(k) {
+  const usd = k === "y" ? SO_PRICE_USD.y : SO_PRICE_USD.m;
+  if (!soIsSaudi()) return { main: "$" + usd.toLocaleString("en-US"), usd: "" };
+  return { main: "SAR " + Math.round(usd * SO_SAR_PER_USD).toLocaleString("en-US"), usd: "$" + usd.toLocaleString("en-US") };
+}
 // Release l: Apple Pay. Lemon Squeezy shows Apple Pay (Safari) and Google Pay (Chrome) on its own checkout
 // page only, never inside the in-page overlay (open request on their feedback board). true = the checkout
 // opens as Lemon Squeezy's page in a new tab; this tab waits and unlocks by itself.
@@ -6634,6 +6854,19 @@ function SoPrivLink({ style }) {
   const { lang } = useLang();
   return <a href={SO_PRIVACY_URL + (lang === "ar" ? "#ar" : "")} target="_blank" rel="noopener"
     style={{ color: "#94a3b8", textDecoration: "underline", textUnderlineOffset: 3, ...style }}>{SO_PRIV_TXT[lang] || SO_PRIV_TXT.en}</a>;
+}
+/* Release o: the plans and prices up front, where the early-access notice was (same box) */
+function SoProNotice() {
+  const { lang } = useLang();
+  const iso = s => "⁨" + s + "⁩";            // keeps "SAR 109" / "$29" in one piece inside Arabic text
+  return (
+    <div style={{ marginBottom: 22, padding: "14px 18px", borderRadius: 12,
+      background: "rgba(245,158,11,.06)", border: "1px solid rgba(245,158,11,.22)" }}>
+      <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 13, letterSpacing: 2,
+        textTransform: "uppercase", color: "#fbbf24", marginBottom: 7 }}>{soMT(lang, "proNoticeTtl")}</div>
+      <div style={{ fontSize: 15.5, lineHeight: 1.65, color: "#94a3b8" }}>{soMT(lang, "proNoticeBody", { m: iso(soPrice("m").main), y: iso(soPrice("y").main) })}</div>
+    </div>
+  );
 }
 const LOGIN_ENABLED = true;      // ◄ false = no e-mail / password anywhere (app exactly as before)
 const PAYMENTS_ENABLED = true;   // ◄ false = free app: no plans, no checkout, no Lemon Squeezy script, no subscription look-ups
@@ -6714,6 +6947,15 @@ const SO_MT = {
   manage:     { en: "Manage subscription", ar: "إدارة الاشتراك", ru: "Управление подпиской", zh: "管理订阅", es: "Gestionar suscripción" },
   close:      { en: "Close", ar: "إغلاق", ru: "Закрыть", zh: "关闭", es: "Cerrar" },
   checking:   { en: "Checking your plan…", ar: "جارٍ التحقق من اشتراكك…", ru: "Проверяем подписку…", zh: "正在检查您的订阅…", es: "Comprobando su plan…" },
+  // release o: prices include tax; the Pro notice replaces the early-access notice once launched
+  taxIncl:    { en: "Tax included", ar: "شامل الضريبة", ru: "Налоги включены", zh: "含税", es: "Impuestos incluidos" },
+  billed:     { en: "Billed {usd}", ar: "يُدفع {usd}", ru: "К оплате {usd}", zh: "实付 {usd}", es: "Se cobra {usd}" },
+  proNoticeTtl:  { en: "Steel Optimizer Pro", ar: "Steel Optimizer Pro", ru: "Steel Optimizer Pro", zh: "Steel Optimizer Pro", es: "Steel Optimizer Pro" },
+  proNoticeBody: { en: "Unlimited optimizations with PDF & Excel cutting reports: {m} a month or {y} a year, tax included. Cancel anytime.",
+                   ar: "تحسين بلا حدود مع تقارير قص PDF و Excel: {m} شهريًا أو {y} سنويًا، شامل الضريبة. إلغاء في أي وقت.",
+                   ru: "Неограниченные расчёты и отчёты раскроя в PDF и Excel: {m} в месяц или {y} в год, налоги включены. Отмена в любой момент.",
+                   zh: "无限次优化，含 PDF 与 Excel 切割报告：每月 {m} 或每年 {y}，含税。随时取消。",
+                   es: "Optimizaciones ilimitadas con informes de corte en PDF y Excel: {m} al mes o {y} al año, impuestos incluidos. Cancele cuando quiera." },
 };
 const soMT = (lang, k, vars) => {
   const e = SO_MT[k]; let s = e ? (e[lang] != null ? e[lang] : e.en) : k;
@@ -6812,14 +7054,39 @@ function soHasPlan(m) {
   if (m.status === "active" || m.status === "on_trial" || m.status === "past_due") return true;
   return m.status === "cancelled" && m.ends_at && Date.parse(m.ends_at) > Date.now();   // paid until the period ends
 }
+/* Release o: the webhook saves Lemon Squeezy TEST-mode subscriptions as "test:<status>".
+   Before launch they count (the owner tests with card 4242); after launch they never unlock anything,
+   so a test card can't buy a free Pro plan even while the test webhook still exists. */
+function soNormPlan(r) {
+  if (!r || typeof r.status !== "string" || r.status.indexOf("test:") !== 0) return r;
+  return SO_LAUNCHED ? { ...r, status: "test_ignored", portal_url: null } : { ...r, status: r.status.slice(5) };
+}
+/* Release o: a customer finished Lemon Squeezy's checkout (its confirmation button brings them back with
+   ?paid=1) but no plan shows up 90 s later → one owner alert, so a broken live webhook is noticed at once. */
+const SO_PAID_KEY = "steelopt_paid_at";
+function soPaidCheck(where) {
+  let at = 0;
+  try { at = +localStorage.getItem(SO_PAID_KEY) || 0; } catch { return; }
+  const age = Date.now() - at;
+  if (!at || age < 90000 || age > 30 * 60000) return;
+  try { if (localStorage.getItem(SO_PAID_KEY + "_sent") === String(at)) return; localStorage.setItem(SO_PAID_KEY + "_sent", String(at)); } catch { return; }
+  const unsent = () => { try { localStorage.removeItem(SO_PAID_KEY + "_sent"); } catch { /* ignore */ } };   // not delivered: the next check tries again
+  try {
+    Promise.resolve(alertMe("PAID BUT NOT UNLOCKED", { where, secs: Math.round(age / 1000), live: SO_LAUNCHED ? 1 : 0 }))
+      .then(r => { if (!r || !r.ok) unsent(); }, unsent);
+  } catch { unsent(); }
+}
+function soPaidClear() { try { localStorage.removeItem(SO_PAID_KEY); } catch { /* ignore */ } }
 async function soLoadPlan() {
   if (!PAYMENTS_ENABLED) return null;
   const s = await soSession();
   if (!s) { soMem.member = null; soMemEmit(); return null; }
   try {
-    const rows = await soApi("/rest/v1/memberships?select=status,ends_at,renews_at,trial_ends_at,portal_url,updated_at&order=updated_at.desc", { token: s.access_token });
-    soMem.member = Array.isArray(rows) && rows.length ? (rows.find(soHasPlan) || rows[0]) : null;
+    const raw = await soApi("/rest/v1/memberships?select=status,ends_at,renews_at,trial_ends_at,portal_url,updated_at&order=updated_at.desc", { token: s.access_token });
+    const rows = Array.isArray(raw) ? raw.map(soNormPlan) : [];
+    soMem.member = rows.length ? (rows.find(soHasPlan) || rows[0]) : null;
     soMem.checkedAt = Date.now();
+    if (soHasPlan(soMem.member)) soPaidClear(); else soPaidCheck("load");   // any plan look-up after a payment can raise the alert
   } catch { /* keep what we had */ }
   soMemEmit();
   return soMem.member;
@@ -6895,7 +7162,11 @@ function SoMemberHost() {
     if (soHasPlan(m)) { clear(); setV("paid"); return; }
     if (k === 0) setV("check");
     if (k < 14) setTimeout(() => confirmPaid(k + 1), 1500);
-    else { setErr(L("notYet")); setV("wait"); }
+    else {
+      setErr(L("notYet")); setV("wait");
+      // release o: still nothing about 1.5 min after paying → tell the owner (soPaidCheck sends one alert at most)
+      setTimeout(() => { soLoadPlan().then(m2 => { if (!soHasPlan(m2)) soPaidCheck("return"); }).catch(() => {}); }, 75000);
+    }
   }).catch(() => {});
   const afterAuth = async () => {
     const p = pending.current;
@@ -6931,6 +7202,7 @@ function SoMemberHost() {
         window.history.replaceState(window.history.state, "", window.location.pathname + (qs ? "?" + qs : "") + window.location.hash);
         if (PAYMENTS_ENABLED && soLoginOn()) {
           paidBack = true;
+          try { localStorage.setItem(SO_PAID_KEY, String(Date.now())); } catch { /* ignore */ }   // release o: the other tab knows the payment went through
           // the checkout tab this app opened: close it, the first tab unlocks by itself (browsers close only script-opened tabs this way)
           if (window.history.length > 1) { try { window.close(); } catch { /* ignore */ } }
         }
@@ -7007,7 +7279,7 @@ function SoMemberHost() {
     await soApi("/auth/v1/user", { body: { password: pass }, token: s.access_token, method: "PUT" });
     setPass(""); if (pending.current) await afterAuth(); else soNavCloseOverlay(() => setView(null));
   }, "reset");
-  const checkNow = async () => { setBusy(true); const m = await soLoadPlan(); setBusy(false); if (soHasPlan(m)) { soCloseLemon(); setMsg(L("paidOk")); setTimeout(finish, 900); } else setErr(L("notYet")); };
+  const checkNow = async () => { setBusy(true); const m = await soLoadPlan(); setBusy(false); if (soHasPlan(m)) { soCloseLemon(); setMsg(L("paidOk")); setTimeout(finish, 900); } else { setErr(L("notYet")); soPaidCheck("check"); } };
   const pay = plan => {
     const tab = CHECKOUT_PAGE_ENABLED ? soOpenTab(L("opening")) : null;   // page checkout: the tab opens now, inside the tap
     let sent = false;
@@ -7022,15 +7294,18 @@ function SoMemberHost() {
         stopPoll(); let n = 0, fired = false, qOn = false;
         // once only: the 4 s poll and Checkout.Success can both find the plan; two finish() calls close together could step the browser Back twice
         const done = () => { if (fired) return; fired = true; stopPoll(); soCloseLemon(); setMsg(L("paidOk")); setTimeout(finish, 900); };
-        poll.current = setInterval(async () => { n++; const m = await soLoadPlan(); if (soHasPlan(m)) done(); else if (n >= 90 && poll.current) { clearInterval(poll.current); poll.current = null; } }, 4000);
+        poll.current = setInterval(async () => { n++; const m = await soLoadPlan(); if (soHasPlan(m)) done(); else { soPaidCheck("wait"); if (n >= 90 && poll.current) { clearInterval(poll.current); poll.current = null; } } }, 4000);
         // right after payment the webhook needs a few seconds: look every 1.5 s for about 18 s (the 4 s poll carries on after that)
         const quick = k => {
           if (fired || (k === 0 && qOn)) return;
           qOn = true;
           soLoadPlan().then(m => {
             if (soHasPlan(m)) { qOn = false; done(); }
-            else if (!fired && k < 12 && viewRef.current) setTimeout(() => quick(k + 1), 1500);
-            else qOn = false;
+            else {
+              soPaidCheck("wait");
+              if (!fired && k < 12 && viewRef.current) setTimeout(() => quick(k + 1), 1500);
+              else qOn = false;
+            }
           }).catch(() => { qOn = false; });
         };
         if (CHECKOUT_PAGE_ENABLED) {
@@ -7039,8 +7314,15 @@ function SoMemberHost() {
           setCo({ url, blocked: !sent });              // blocked: the window shows a plain link instead (a tapped link always opens)
           // phones pause background tabs: check the moment the customer is back on this tab
           const back = () => { if (document.visibilityState === "visible") quick(0); };
-          document.addEventListener("visibilitychange", back); window.addEventListener("focus", back);
-          ret.current = () => { document.removeEventListener("visibilitychange", back); window.removeEventListener("focus", back); };
+          // release o: the checkout tab came back with ?paid=1 (it writes steelopt_paid_at): look now, and once more
+          // 95 s later; if the plan is still missing then, the owner gets one "PAID BUT NOT UNLOCKED" alert
+          const onStore = e => {
+            if (!e || e.key !== SO_PAID_KEY || !e.newValue) return;
+            quick(0);
+            setTimeout(() => { soLoadPlan().then(m => { if (soHasPlan(m)) { if (viewRef.current) done(); } else soPaidCheck("wait"); }).catch(() => {}); }, 95000);
+          };
+          document.addEventListener("visibilitychange", back); window.addEventListener("focus", back); window.addEventListener("storage", onStore);
+          ret.current = () => { document.removeEventListener("visibilitychange", back); window.removeEventListener("focus", back); window.removeEventListener("storage", onStore); };
           return;
         }
         try {
@@ -7075,13 +7357,14 @@ function SoMemberHost() {
     </label>);
   const planCard = k => {
     const one = MEMBERSHIP.checkoutMonthly === MEMBERSHIP.checkoutYearly;   // one link → plans shown as info, chosen in the checkout
-    const on = !one && pick === k, price = k === "y" ? MEMBERSHIP.priceYearly : MEMBERSHIP.priceMonthly;
+    const on = !one && pick === k, pr = soPrice(k), price = pr.main;
     return (
       <button key={k} type="button" onClick={() => setPick(k)} aria-pressed={on} style={{ flex: "1 1 180px", position: "relative", padding: "18px 16px", borderRadius: 12, cursor: "pointer", textAlign: "start",
         background: on ? "rgba(245,158,11,.12)" : "#0a0f18", border: `2px solid ${on ? "rgba(245,158,11,.8)" : "#243044"}`, color: "#e2e8f0", fontFamily: "inherit" }}>
         {k === "y" && MEMBERSHIP.checkoutMonthly && <span style={{ position: "absolute", top: -11, insetInlineEnd: 12, padding: "2px 10px", borderRadius: 20, background: "#f59e0b", color: "#1a1206", fontSize: 13.5, fontWeight: 800 }}>{L("bestValue")}</span>}
         <div style={{ fontSize: 15, color: "#94a3b8", fontWeight: 700, letterSpacing: 0.6 }}>{one ? "" : on ? "● " : "○ "}{L(k === "y" ? "yearly" : "monthly")}</div>
-        {price && <div style={{ marginTop: 6 }}><span style={{ fontSize: 34, fontWeight: 900, color: "#f8fafc" }}>{price}</span><span style={{ fontSize: 16, color: "#94a3b8" }}> {L(k === "y" ? "perYr" : "perMo")}</span></div>}
+        {price && <div style={{ marginTop: 6 }}><span dir="ltr" style={{ fontSize: 34, fontWeight: 900, color: "#f8fafc", unicodeBidi: "isolate", whiteSpace: "nowrap" }}>{price}</span><span style={{ fontSize: 16, color: "#94a3b8", whiteSpace: "nowrap" }}> {L(k === "y" ? "perYr" : "perMo")}</span></div>}
+        {price && <div style={{ marginTop: 4, fontSize: 14.5, color: "#94a3b8" }}>{pr.usd && <>{L("billed", { usd: "\u2068" + pr.usd + "\u2069" })}{" · "}</>}{L("taxIncl")}</div>}
       </button>);
   };
   return (
