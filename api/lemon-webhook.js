@@ -8,6 +8,8 @@
 //      Signing secret: the same text - Events: every "subscription_..." event
 // Checks the Lemon Squeezy signature, then saves the subscription (status, renewal date, customer portal)
 // against the signed-in user id the app sends to the checkout. Other events are ignored.
+// Release o: a TEST-mode subscription (card 4242) is saved as "test:<status>". The app counts it only
+// before the paid launch, so after launch a test card unlocks nothing, even if the test webhook is left on.
 import crypto from "node:crypto";
 
 function readRaw(req) {
@@ -41,10 +43,12 @@ export default async function handler(req, res) {
   if (!data || data.type !== "subscriptions" || !a) { res.statusCode = 200; res.end("ignored"); return; }
 
   const custom = (p.meta && p.meta.custom_data) || {};
+  // live only when Lemon Squeezy says test_mode false; anything else is treated as test (it unlocks nothing after launch)
+  const isTest = a.test_mode !== false || !!(p.meta && p.meta.test_mode === true);
   const row = {
     ls_subscription_id: String(data.id),
     email: String(a.user_email || "").toLowerCase(),
-    status: String(a.status || ""),
+    status: (isTest ? "test:" : "") + String(a.status || ""),
     variant_id: a.variant_id != null ? String(a.variant_id) : null,
     renews_at: a.renews_at || null,
     ends_at: a.ends_at || null,

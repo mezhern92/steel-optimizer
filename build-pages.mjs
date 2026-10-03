@@ -17,6 +17,12 @@
    IndexNow: on a Vercel production build only, new or changed pages are sent to
    api.indexnow.org (Bing and the other IndexNow engines). The list of what is
    live is kept in /steel-sections/manifest.json and compared on the next build.
+
+   Paid launch (release o): patchLaunch() reads launch.json at the repo root. When it
+   says {"paid": true}, the built home page (dist/index.html) loses the word "Free"
+   (title, description, link previews, noscript text) and its Schema price becomes
+   29 USD a month, tax included; Bing is told once that the home page changed.
+   {"paid": false}, a missing file or bad JSON: the home page is left exactly as it is.
 */
 import fs from "node:fs";
 import path from "node:path";
@@ -46,6 +52,9 @@ const FAMILY = {
   "JIS-C": { title: "Channels (JIS)", std: "JIS G 3192", kind: "a channel" },
 };
 const FAMILY_ORDER = ["IPE", "HEA", "HEB", "HEM", "UPN", "UPE", "UB", "UC", "W", "C-AMER", "MC", "JIS-HW", "JIS-HM", "JIS-HN", "JIS-I", "JIS-C"];
+
+// link-preview image: the launch version drops "No signup" from the footer (public/preview-pro.png)
+let ogImage = "/preview.png";
 
 const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const num = (v, d) => {
@@ -115,7 +124,7 @@ function page({ title, desc, canonical, body, jsonld }) {
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(desc)}">
 <meta property="og:url" content="${esc(canonical)}">
-<meta property="og:image" content="${SITE}/preview.png">
+<meta property="og:image" content="${SITE}${ogImage}">
 <script type="application/ld+json">${JSON.stringify(jsonld).replace(/</g, "\\u003c")}</script>
 <style>${CSS}</style>
 </head>
@@ -211,29 +220,88 @@ async function fetchJson(url, ms) {
   catch { return null; } finally { clearTimeout(tm); }
 }
 
-async function pingIndexNow(root, manifest, log) {
-  if (process.env.VERCEL_ENV !== "production" || typeof fetch !== "function") return;
+async function fetchText(url, ms) {
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), ms);
+  try { const r = await fetch(url, { signal: ctl.signal, headers: { "cache-control": "no-cache" } }); return r.ok ? await r.text() : null; }
+  catch { return null; } finally { clearTimeout(tm); }
+}
+
+function indexNowKey(root) {
   const pub = path.join(root, "public");
-  const keyFile = fs.existsSync(pub) ? fs.readdirSync(pub).find(f => /^[0-9a-f]{32}\.txt$/.test(f)) : null;
-  if (!keyFile) { log("[section-pages] IndexNow: no key file in public/, skipped"); return; }
-  const key = keyFile.slice(0, 32);
-  const live = (await fetchJson(SITE + "/steel-sections/manifest.json", 8000)) || {};
-  const changed = Object.keys(manifest).filter(u => live[u] !== manifest[u]).map(u => SITE + u).slice(0, 10000);
-  if (!changed.length) { log("[section-pages] IndexNow: nothing new or changed"); return; }
+  return fs.existsSync(pub) ? fs.readdirSync(pub).find(f => /^[0-9a-f]{32}\.txt$/.test(f)) || null : null;
+}
+
+async function indexNowSend(keyFile, urls, tag, log) {
   const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 15000);
   try {
     const r = await fetch(INDEXNOW_ENDPOINT, {
       method: "POST", signal: ctl.signal,
       headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ host: new URL(SITE).host, key, keyLocation: `${SITE}/${keyFile}`, urlList: changed }),
+      body: JSON.stringify({ host: new URL(SITE).host, key: keyFile.slice(0, 32), keyLocation: `${SITE}/${keyFile}`, urlList: urls }),
     });
-    log(`[section-pages] IndexNow: sent ${changed.length} URL(s), HTTP ${r.status}`);
-  } catch (e) { log("[section-pages] IndexNow: not sent (" + (e && e.message) + ")"); }
+    log(`${tag} IndexNow: sent ${urls.length} URL(s), HTTP ${r.status}`);
+  } catch (e) { log(`${tag} IndexNow: not sent (` + (e && e.message) + ")"); }
   finally { clearTimeout(tm); }
+}
+
+async function pingIndexNow(root, manifest, log) {
+  if (process.env.VERCEL_ENV !== "production" || typeof fetch !== "function") return;
+  const keyFile = indexNowKey(root);
+  if (!keyFile) { log("[section-pages] IndexNow: no key file in public/, skipped"); return; }
+  const live = (await fetchJson(SITE + "/steel-sections/manifest.json", 8000)) || {};
+  const changed = Object.keys(manifest).filter(u => live[u] !== manifest[u]).map(u => SITE + u).slice(0, 10000);
+  if (!changed.length) { log("[section-pages] IndexNow: nothing new or changed"); return; }
+  await indexNowSend(keyFile, changed, "[section-pages]", log);
+}
+
+/* ---------- paid launch: launch.json → home page ---------- */
+export function readLaunchFlag(root = process.cwd()) {
+  try { const j = JSON.parse(fs.readFileSync(path.join(root, "launch.json"), "utf8").replace(/^\uFEFF/, "")); return !!(j && j.paid === true); }
+  catch { return false; }
+}
+
+const OLD_TITLE = "Steel Cutting Optimizer — Free Bar, Section &amp; Plate Nesting Calculator";
+// [as written in index.html, once launched]; each edit is applied only where its text is found
+const LAUNCH_EDITS = [
+  [`<title>${OLD_TITLE}</title>`, "<title>Steel Cutting Optimizer — Bar, Section &amp; Plate Nesting Calculator</title>"],
+  [`content="Free online steel cutting optimizer. `, `content="Online steel cutting optimizer. `],
+  [`content="Steel Cutting Optimizer — Free Bar, Section &amp; Plate Nesting"`, `content="Steel Cutting Optimizer — Bar, Section &amp; Plate Nesting"`],
+  [`in one click. No install, no licence."`, `in one click. No install."`],
+  [`content="Steel Cutting Optimizer — Free"`, `content="Steel Cutting Optimizer"`],
+  [`<!-- Schema.org — tells Google this is a free web application -->`, `<!-- Schema.org — web application, monthly subscription, price includes tax -->`],
+  [`"offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }`,
+   `"offers": { "@type": "Offer", "price": "29", "priceCurrency": "USD", "priceSpecification": { "@type": "UnitPriceSpecification", "price": "29", "priceCurrency": "USD", "unitText": "MONTH", "valueAddedTaxIncluded": true } }`],
+  [`<p>Free browser-based cutting and nesting optimizer for structural steel.`, `<p>Browser-based cutting and nesting optimizer for structural steel.`],
+  [`Runs in any browser. No install, no licence, no training.`, `Runs in any browser. No install, no training.`],
+  [`content="https://steeloptimizer.com/preview.png"`, `content="https://steeloptimizer.com/preview-pro.png"`],   // og:image + twitter:image
+];
+
+export async function patchLaunch({ root = process.cwd(), outDir = "dist", log = console.log } = {}) {
+  if (!readLaunchFlag(root)) { log("[launch] free: home page left as it is"); return { paid: false, edits: 0 }; }
+  const file = path.join(outDir, "index.html");
+  let html = fs.readFileSync(file, "utf8");
+  let edits = 0; const missing = [];
+  for (const [from, to] of LAUNCH_EDITS) {
+    if (html.includes(from)) { html = html.split(from).join(to); edits++; }
+    else if (!html.includes(to)) missing.push(from.slice(0, 48));
+  }
+  const ld = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  if (ld) JSON.parse(ld[1]);                    // the Schema block must still be valid JSON, or nothing is written
+  fs.writeFileSync(file, html);
+  const leftFree = (html.match(/\bFree\b/g) || []).length;
+  log(`[launch] PAID: home page updated (${edits}/${LAUNCH_EDITS.length} edits` + (missing.length ? `; not found: ${missing.join(" | ")}` : "") + `; "Free" left: ${leftFree})`);
+  // Bing: send the home page once, the first time the paid version goes live (the live page still has the old title)
+  if (process.env.VERCEL_ENV === "production" && typeof fetch === "function" && edits) {
+    const keyFile = indexNowKey(root);
+    const live = await fetchText(SITE + "/?launch-check=" + Date.now(), 8000);
+    if (keyFile && live && live.includes(OLD_TITLE)) await indexNowSend(keyFile, [SITE + "/"], "[launch]", log);
+  }
+  return { paid: true, edits, missing };
 }
 
 export async function buildSectionPages({ root = process.cwd(), outDir = "dist", log = console.log } = {}) {
   const t0 = Date.now();
+  ogImage = readLaunchFlag(root) && fs.existsSync(path.join(root, "public", "preview-pro.png")) ? "/preview-pro.png" : "/preview.png";
   const jsx = fs.readFileSync(path.join(root, "src", "SteelCutOptimizer.jsx"), "utf8");
   const L = loadLibrary(jsx);
   const byPath = new Map();
