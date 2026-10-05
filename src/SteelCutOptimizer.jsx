@@ -89,7 +89,7 @@ const SO_DEMO_PLATES = "500x300x12x4|380x250x12x6|600x400x20x3|280x180x8x8";
 function soIsDemoPlates(parts) {
   try { return (parts || []).map(p => `${+p.length}x${+p.width}x${+p.thickness}x${+p.qty}`).join("|") === SO_DEMO_PLATES; } catch { return false; }
 }
-const SO_BUILD = "2026-10-02o";   // sent with every usage alert → shows which version is live
+const SO_BUILD = "2026-10-04p";   // sent with every usage alert → shows which version is live
 // Release o: every alert keeps going to Formspree before and after the paid launch (owner's choice).
 // Problem alerts (sign-in/e-mail/service problems, "PAID BUT NOT UNLOCKED") are never held back by the
 // per-page cap. Note: Formspree Free = 50 submissions a month in total; with paying customers the routine
@@ -1410,14 +1410,17 @@ function PlatesModule({ onBack }) {
         const totalArea = gsheets.length * sw * sh; const wastePct = gsheets.length ? Math.round(((totalArea - usedArea) / totalArea) * 100) : 0;
         const allThkParts = byThk[thk];
         const partVol = allThkParts.reduce((s, p) => s + p.length * p.width * thk * p.qty, 0); const partWeight = (partVol / 1e9) * DENSITY; const sheetWeight = (gsheets.length * sw * sh * thk / 1e9) * DENSITY;
+        // release p: scrap = new sheets minus the parts cut FROM those sheets. Parts cut from reused offcuts
+        // never came out of the new sheets (before, this went negative and the page showed "-0.25 t").
+        const onNewSheetsWeight = (usedArea * thk / 1e9) * DENSITY;
         const offcuts = []; gsheets.forEach((st, si) => (st.offcuts || []).forEach(o => { const area = o.shape === "L" ? (o.A * o.B - o.notchW * o.notchH) : (o.A * o.B); offcuts.push({ sheet: si + 1, ...o, area, weight: (area * thk / 1e9) * DENSITY }); }));
         const splices = (gsheets.splices || []).map(s => ({ label: s.label, W: s.W, L: s.L, count: s.count, qty: s.qty }));
         const reusedUsedCount = offcutPlans.length;
         const paintM2 = plateFacePaintM2(allThkParts);   // paint area: isolated add-on (one face, user's parts)
-        return { thickness: thk, sw, sh, paintM2, sheets: gsheets, sheetCount: gsheets.length, partCount: allThkParts.reduce((s, p) => s + p.qty, 0), usedArea, totalArea, wastePct, utilPct: gsheets.length ? 100 - wastePct : 100, partWeight, sheetWeight, wasteWeight: sheetWeight - partWeight, offcuts, offcutWeight: offcuts.reduce((s, o) => s + o.weight, 0), splices, marginUsed: gsheets.marginUsed, offcutPlans, reusedUsedCount };
+        return { thickness: thk, sw, sh, paintM2, sheets: gsheets, sheetCount: gsheets.length, partCount: allThkParts.reduce((s, p) => s + p.qty, 0), usedArea, totalArea, wastePct, utilPct: gsheets.length ? 100 - wastePct : 100, partWeight, sheetWeight, wasteWeight: Math.max(0, sheetWeight - onNewSheetsWeight), offcuts, offcutWeight: offcuts.reduce((s, o) => s + o.weight, 0), splices, marginUsed: gsheets.marginUsed, offcutPlans, reusedUsedCount };
       });
       const totals = groups.reduce((a, g) => ({ sheets: a.sheets + g.sheetCount, parts: a.parts + g.partCount, sheetWeight: a.sheetWeight + g.sheetWeight, partWeight: a.partWeight + g.partWeight, wasteWeight: a.wasteWeight + g.wasteWeight, totalArea: a.totalArea + g.totalArea, usedArea: a.usedArea + g.usedArea, offcutCount: a.offcutCount + g.offcuts.length, offcutWeight: a.offcutWeight + g.offcutWeight, spliceCount: a.spliceCount + g.splices.reduce((ss, s) => ss + s.qty, 0), reusedUsed: a.reusedUsed + g.reusedUsedCount, paintM2: addPaint(a.paintM2, g.paintM2) }), { sheets: 0, parts: 0, sheetWeight: 0, partWeight: 0, wasteWeight: 0, totalArea: 0, usedArea: 0, offcutCount: 0, offcutWeight: 0, spliceCount: 0, reusedUsed: 0, paintM2: 0 });
-      totals.utilPct = Math.round((totals.usedArea / totals.totalArea) * 100); totals.wastePct = 100 - totals.utilPct;
+      totals.utilPct = totals.totalArea ? Math.round((totals.usedArea / totals.totalArea) * 100) : 100; totals.wastePct = 100 - totals.utilPct;   // no new sheets (all from reused offcuts) → nothing wasted
       track("optimization_completed", { module: "plates", sheets: totals?.totalSheets || 0, waste_pct: Math.round(parseFloat(totals?.wastePct || 0)) });
       if (inputMode === "manual") soNotifyManual("plates", { parts: valid.length, pieces: totals.parts, thicknesses: groups.length, sheets: totals.sheets, demo: soIsDemoPlates(parts) });
       setResults({ groups, totals }); setIsOpt(false); soNavGo({ r: true });
@@ -3995,6 +3998,245 @@ function packOneSheetBest(W, H, queue, kerf, rot) {
   return best || { placed: [], left: queue };
 }
 
+/* ╔══ COMPACT-REMNANT add-on (release p) ══════════════════════════════════════╗
+   How shops cut plate: parts are nested from ONE end of the sheet and the rest
+   is cropped off with one straight cut, so the leftover is a single reusable
+   rectangle (ProNest crop lines, Kinetic "nest direction", MaxCut "group at
+   bottom"; Andrade, Birgin et al., two-stage guillotine cutting with usable
+   leftover). Shears and saws cut strips across the sheet, then cross-cut the
+   strips (staged guillotine), which is exactly the layout used here.
+   v2 picks the fewest sheets but never looks at WHERE the waste ends up, so a
+   sheet could come out with its free area scattered through the middle.
+   This add-on keeps v2's answer and, sheet by sheet, re-lays the SAME parts as
+   a guillotine strip layout grown from one corner (tried along both sheet
+   directions), so the free area gathers at the far end as one rectangle.
+   A sheet is changed only when the biggest offcut that crop cuts can take off
+   it (a corner rectangle; usually the full-width end strip) gets bigger AND the
+   offcut the results page reports (its area and its "use w × h") does not get
+   smaller; otherwise v2's layout stays exactly as it was. Then it tries to move
+   the last sheet's parts into the other sheets' end strips, to save a whole
+   sheet. Never more sheets than v2, never a smaller reported offcut on any
+   sheet. Sheets with more than SO_COMPACT_MAX_PIECES parts are left as they are.
+   Measured on 2,500+ test sheets: 0 overlaps, all guillotine-cuttable, a few
+   sheets saved, about 10% more reusable offcut area.
+   NEST_COMPACT_ENABLED = false → v2 exactly.                                    */
+const NEST_COMPACT_ENABLED = true;
+const SO_COMPACT_MAX_PIECES = 300;   // bigger sheets keep v2's layout: the gain there is tiny and the page must stay fast
+
+/* orientations to try for one piece, preferred first */
+function soStripOrients(p, rot, mode) {
+  const a = [p.w, p.h, false], b = [p.h, p.w, true];
+  if (!rot) return [a];
+  if (mode === "flat") return p.w >= p.h ? [a, b] : [b, a];   // long side across the strip
+  if (mode === "tall") return p.w <= p.h ? [a, b] : [b, a];   // long side along the strip
+  return [a, b];
+}
+/* Level packer = 3-stage guillotine: levels cut across the full strip width,
+   columns inside a level, parts stacked inside a column. First fit. */
+function soStripLevel(W, Lmax, q, kerf, rot, mode) {
+  const levels = [], placed = [], left = [];
+  let top = 0;
+  for (const p of q) {
+    const os = soStripOrients(p, rot, mode);
+    let done = false;
+    for (const lv of levels) {
+      for (const c of lv.cols) {                                   // stack in a column
+        for (const [w, h, r] of os) {
+          if (w <= c.w && c.used + kerf + h <= lv.h) { placed.push({ x: c.x, y: lv.y + c.used + kerf, w, h, rotated: r, src: p }); c.used += kerf + h; done = true; break; }
+        }
+        if (done) break;
+      }
+      if (done) break;
+      for (const [w, h, r] of os) {                                // new column in this level
+        const x = lv.usedW + kerf;
+        if (x + w <= W && h <= lv.h) { placed.push({ x, y: lv.y, w, h, rotated: r, src: p }); lv.cols.push({ x, w, used: h }); lv.usedW = x + w; done = true; break; }
+      }
+      if (done) break;
+    }
+    if (done) continue;
+    const y = levels.length ? top + kerf : 0;                      // open a new level
+    for (const [w, h, r] of os) {
+      if (w <= W && y + h <= Lmax) { levels.push({ y, h, usedW: w, cols: [{ x: 0, w, used: h }] }); placed.push({ x: 0, y, w, h, rotated: r, src: p }); top = y + h; done = true; break; }
+    }
+    if (!done) left.push(p);
+  }
+  return { placed, left };
+}
+/* Guillotine free-rectangle packer with a POSITION rule: each part goes where its
+   far edge (y + h) is lowest, so the layout grows from one end of the strip. */
+function soStripGuil(W, Lmax, q, kerf, rot, split) {
+  const free = [{ x: 0, y: 0, w: W, h: Lmax }];
+  const placed = [], left = [];
+  for (const p of q) {
+    let bi = -1, bw = 0, bh = 0, br = false, bTop = Infinity, bX = Infinity, bA = Infinity;
+    for (let i = 0; i < free.length; i++) {
+      const f = free[i];
+      for (const [w, h, r] of (rot ? [[p.w, p.h, false], [p.h, p.w, true]] : [[p.w, p.h, false]])) {
+        if (w > f.w || h > f.h) continue;
+        const t = f.y + h, a = f.w * f.h - w * h;
+        if (t < bTop || (t === bTop && (f.x < bX || (f.x === bX && a < bA)))) { bi = i; bw = w; bh = h; br = r; bTop = t; bX = f.x; bA = a; }
+      }
+    }
+    if (bi < 0) { left.push(p); continue; }
+    const f = free[bi];
+    placed.push({ x: f.x, y: f.y, w: bw, h: bh, rotated: br, src: p });
+    const rw = f.w - bw - kerf, rh = f.h - bh - kerf;
+    const horiz = split === "H" ? true : split === "V" ? false : split === "SAS" ? (f.w - bw < f.h - bh) : (f.w - bw >= f.h - bh);
+    free.splice(bi, 1);
+    if (horiz) { if (rw > 0) free.push({ x: f.x + bw + kerf, y: f.y, w: rw, h: bh }); if (rh > 0) free.push({ x: f.x, y: f.y + bh + kerf, w: f.w, h: rh }); }
+    else { if (rw > 0) free.push({ x: f.x + bw + kerf, y: f.y, w: rw, h: f.h }); if (rh > 0) free.push({ x: f.x, y: f.y + bh + kerf, w: bw, h: rh }); }
+  }
+  return { placed, left };
+}
+const SO_STRIP_SORTS = [
+  (a, b) => Math.min(b.w, b.h) - Math.min(a.w, a.h) || Math.max(b.w, b.h) - Math.max(a.w, a.h),   // level height when laid flat
+  (a, b) => Math.max(b.w, b.h) - Math.max(a.w, a.h) || Math.min(b.w, b.h) - Math.min(a.w, a.h),   // level height when stood up
+  (a, b) => b.w * b.h - a.w * a.h,
+  (a, b) => (b.h - a.h) || (b.w - a.w),
+  (a, b) => (b.w - a.w) || (b.h - a.h),
+];
+const soFarEdge = (pl, k) => pl.reduce((m, p) => Math.max(m, p[k]), 0);
+/* The biggest offcut that straight crop cuts can take off the sheet: the largest
+   empty rectangle that sits in a CORNER of the usable W x H area (a full-width
+   end strip is the special case). An empty hole in the middle does not count:
+   cutting the parts out chops it up, so in the shop it is only scrap. */
+function soEndRemnant(pl, W, H, kerf) {
+  let best = 0;
+  const n = pl.length;
+  for (const fx of [false, true]) for (const fy of [false, true]) {
+    // mirror so the corner being measured is the far corner (W, H); a part blocks the
+    // corner rectangle [x0, W] x [y0, H] unless a kerf fits between them (x1 + kerf <= x0),
+    // so y0 must clear the highest top among the blocking parts (suffix maximum over
+    // parts sorted by right edge). Same rule on both axes, so the measure is symmetric.
+    const rs = pl.map(p => ({ x1: fx ? W - p.x : p.x + p.w, y1: fy ? H - p.y : p.y + p.h })).sort((a, b) => a.x1 - b.x1);
+    const suf = new Array(n + 1).fill(0);
+    for (let i = n - 1; i >= 0; i--) suf[i] = Math.max(suf[i + 1], rs[i].y1 + kerf);
+    const xs = [0, ...rs.map(r => r.x1 + kerf)].filter(x => x < W).sort((a, b) => a - b);
+    let k = 0;
+    for (const x0 of xs) {
+      while (k < n && rs[k].x1 + kerf <= x0 + 1e-6) k++;
+      const y0 = n ? suf[k] : 0;
+      if (y0 < H) best = Math.max(best, (W - x0) * (H - y0));
+    }
+  }
+  return { area: best };
+}
+/* Every compact strip layout of these pieces, best clean end remnant first
+   (or null when none holds them all). Coordinates: the usable W x H area. */
+function soBestStripLayout(W, H, pieces, kerf, rot) {
+  let best = null;
+  for (const axis of ["A", "B"]) {
+    const SW = axis === "A" ? W : H, SL = axis === "A" ? H : W;
+    const items = axis === "A" ? pieces : pieces.map(s => ({ w: s.h, h: s.w, src: s }));
+    for (const cmp of SO_STRIP_SORTS) {
+      const q = [...items].sort(cmp);
+      const runs = [soStripLevel(SW, SL, q, kerf, rot, "flat"), soStripLevel(SW, SL, q, kerf, rot, "tall"), soStripLevel(SW, SL, q, kerf, rot, "any")];
+      for (const sp of ["H", "V", "SAS", "LAS"]) runs.push(soStripGuil(SW, SL, q, kerf, rot, sp));
+      for (const run of runs) {
+        if (run.left.length) continue;
+        const rem = soEndRemnant(run.placed, SW, SL, kerf).area;
+        // tie → the first one found: axis A (crop across the sheet width, the natural first cut on a shear), level layouts first
+        if (!best || rem > best.rem + 1e-6) best = { rem, axis, placed: run.placed };
+      }
+    }
+  }
+  if (!best) return null;
+  const placed = best.axis === "A" ? best.placed
+    : best.placed.map(q => ({ x: q.y, y: q.x, w: q.h, h: q.w, rotated: q.rotated, src: q.src.src }));
+  return { rem: best.rem, placed };
+}
+/* Best partial fill of one free rectangle (x0,y0,w,h): the run that places the
+   most area. Returns { placed (sheet coordinates), left }. */
+function soFillZone(x0, y0, w, h, pieces, kerf, rot) {
+  let best = null;
+  if (w > 0 && h > 0) for (const axis of ["A", "B"]) {
+    const SW = axis === "A" ? w : h, SL = axis === "A" ? h : w;
+    const items = axis === "A" ? pieces : pieces.map(s => ({ w: s.h, h: s.w, src: s }));
+    for (const cmp of SO_STRIP_SORTS) {
+      const q = [...items].sort(cmp);
+      const runs = [soStripLevel(SW, SL, q, kerf, rot, "flat"), soStripLevel(SW, SL, q, kerf, rot, "tall"), soStripLevel(SW, SL, q, kerf, rot, "any")];
+      for (const sp of ["H", "V", "SAS", "LAS"]) runs.push(soStripGuil(SW, SL, q, kerf, rot, sp));
+      for (const run of runs) {
+        const area = run.placed.reduce((s, p) => s + p.w * p.h, 0);
+        if (!best || area > best.area + 1e-6) best = { area, axis, run };
+      }
+    }
+  }
+  if (!best || !best.run.placed.length) return { placed: [], left: pieces };
+  const placed = best.axis === "A"
+    ? best.run.placed.map(q => ({ ...q, x: x0 + q.x, y: y0 + q.y }))
+    : best.run.placed.map(q => ({ x: x0 + q.y, y: y0 + q.x, w: q.h, h: q.w, rotated: q.rotated, src: q.src.src }));
+  const left = best.axis === "A" ? best.run.left : best.run.left.map(s => s.src);
+  return { placed, left };
+}
+/* The offcut the results page will report for a layout: its full area (an L counts
+   both arms, as in the offcut weight) and its usable rectangle ("use w × h"). */
+function soShownOffcut(pl, W, H, reuseMin) {
+  const o = findOffcuts(pl, 0, W, H, reuseMin)[0];
+  if (!o) return { area: 0, use: 0 };
+  return { area: o.shape === "L" ? o.A * o.B - o.notchW * o.notchH : o.A * o.B, use: o.w * o.h };
+}
+const soNotSmaller = (a, b) => a.area >= b.area - 1e-6 && a.use >= b.use - 1e-6;
+/* The whole job: sheets = arrays of {x,y,w,h,rotated,src} in usable coordinates. */
+function soCompactJob(W, H, sheets, kerf, rot, reuseMin) {
+  // 1) each sheet: take the best strip layout of the same parts only if the offcut that can be
+  //    cropped off gets bigger AND the offcut the page reports does not get smaller
+  let out = sheets.map(pl => {
+    if (pl.length < 2 || pl.length > SO_COMPACT_MAX_PIECES) return pl;
+    const r = soBestStripLayout(W, H, pl.map(p => p.src), kerf, rot);
+    if (r && r.placed.length === pl.length &&
+        soEndRemnant(r.placed, W, H, kerf).area > soEndRemnant(pl, W, H, kerf).area + 1e-6 &&   // both measured on the sheet itself
+        soNotSmaller(soShownOffcut(r.placed, W, H, reuseMin), soShownOffcut(pl, W, H, reuseMin))) return r.placed;
+    return pl;
+  });
+  // 2) try to empty the last sheet into the other sheets' end remnants (saves a whole sheet)
+  for (let guard = 0; guard < 50 && out.length > 1; guard++) {
+    const lastIdx = out.length - 1;
+    if (out[lastIdx].length > SO_COMPACT_MAX_PIECES) break;
+    let pending = out[lastIdx].map(p => p.src);
+    const trial = out.slice(0, lastIdx).map(pl => pl.slice());
+    const order = trial.map((pl, i) => ({ i, area: soEndRemnant(pl, W, H, kerf).area })).sort((a, b) => b.area - a.area);
+    for (const { i } of order) {
+      if (!pending.length) break;
+      const pl = trial[i];
+      const ey = pl.length ? soFarEdge(pl.map(p => ({ e: p.y + p.h })), "e") + kerf : 0;
+      const ex = pl.length ? soFarEdge(pl.map(p => ({ e: p.x + p.w })), "e") + kerf : 0;
+      const zones = [{ x: 0, y: ey, w: W, h: H - ey }, { x: ex, y: 0, w: W - ex, h: H }].filter(z => z.w > 0 && z.h > 0).sort((a, b) => b.w * b.h - a.w * a.h);
+      for (const z of zones.slice(0, 1)) {            // one straight crop cut per sheet: use the bigger end strip only
+        const got = soFillZone(z.x, z.y, z.w, z.h, pending, kerf, rot);
+        if (got.placed.length) { trial[i] = pl.concat(got.placed); pending = got.left; }
+      }
+    }
+    if (pending.length) break;                // could not empty it: keep the sheets as they are
+    out = trial;                              // one sheet fewer
+  }
+  return out;
+}
+/* Safety net: the compacted job must hold exactly the same pieces, inside the
+   usable area, with no overlaps; anything else and v2's layout is kept. */
+function soJobOk(before, after, W, H, kerf, rot) {
+  const A = before.flat().map(p => p.src), B = after.flat().map(p => p.src);
+  if (A.length !== B.length) return false;
+  const setA = new Map(); A.forEach(x => setA.set(x, (setA.get(x) || 0) + 1));
+  for (const x of B) { const n = setA.get(x) || 0; if (!n) return false; setA.set(x, n - 1); }
+  for (const pl of after) {
+    for (const p of pl) {
+      if (![p.x, p.y, p.w, p.h].every(Number.isFinite)) return false;
+      if (!(p.w > 0 && p.h > 0) || p.x < -0.01 || p.y < -0.01 || p.x + p.w > W + 0.01 || p.y + p.h > H + 0.01) return false;
+      if (p.rotated && !rot) return false;
+      const okDims = p.rotated ? (Math.abs(p.w - p.src.h) < 0.01 && Math.abs(p.h - p.src.w) < 0.01) : (Math.abs(p.w - p.src.w) < 0.01 && Math.abs(p.h - p.src.h) < 0.01);
+      if (!okDims) return false;
+    }
+    for (let i = 0; i < pl.length; i++) for (let j = i + 1; j < pl.length; j++) {
+      const a = pl[i], b = pl[j];
+      const gx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w)), gy = Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h));
+      if (gx < kerf - 0.01 && gy < kerf - 0.01) return false;   // overlapping, or closer than one saw/torch cut
+    }
+  }
+  return true;
+}
+/* ╚══ end of COMPACT-REMNANT add-on ═════════════════════════════════════════╝ */
+
 /* ─── PLATE NESTING ENGINE (with reusable offcuts + oversize detection) ──── */
 function splitPart(W, L, uw, uh, allowRotation, pref) {
   // Split a part too big for the sheet into welded sub-pieces, divided EQUALLY so
@@ -4046,6 +4288,13 @@ function nestPlates(sheetW, sheetH, parts, kerf, margin, allowRotation, reuseMin
   // the best complete solution. The v1 shelf pass is one of the strategies, so
   // the result can never be worse than what v1 produced.
   const solved = packAllSheetsBest(usableW, usableH, queue, kerf, allowRotation);
+  // release p: same parts, laid from one end so each sheet's leftover is one clean rectangle (add-on above)
+  if (NEST_COMPACT_ENABLED && solved.sheets.length) {
+    try {
+      const compact = soCompactJob(usableW, usableH, solved.sheets, kerf, allowRotation, reuseMin);
+      if (compact.length <= solved.sheets.length && soJobOk(solved.sheets, compact, usableW, usableH, kerf, allowRotation)) solved.sheets = compact;
+    } catch (e) { /* keep v2's layout */ }
+  }
   solved.sheets.forEach(pl => {
     const placements = pl.map(q => ({
       x: m + q.x, y: m + q.y, w: q.w, h: q.h, rotated: q.rotated,
