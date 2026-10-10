@@ -89,7 +89,7 @@ const SO_DEMO_PLATES = "500x300x12x4|380x250x12x6|600x400x20x3|280x180x8x8";
 function soIsDemoPlates(parts) {
   try { return (parts || []).map(p => `${+p.length}x${+p.width}x${+p.thickness}x${+p.qty}`).join("|") === SO_DEMO_PLATES; } catch { return false; }
 }
-const SO_BUILD = "2026-10-05p";   // sent with every usage alert → shows which version is live
+const SO_BUILD = "2026-10-07q";   // sent with every usage alert → shows which version is live
 // Release o: every alert keeps going to Formspree before and after the paid launch (owner's choice).
 // Problem alerts (sign-in/e-mail/service problems, "PAID BUT NOT UNLOCKED") are never held back by the
 // per-page cap. Note: Formspree Free = 50 submissions a month in total; with paying customers the routine
@@ -7127,13 +7127,16 @@ const MEMBERSHIP = {
 /* Release o: prices. Lemon Squeezy's store is in US dollars and charges every card in US dollars;
    prices include tax (store setting "Tax-inclusive pricing"). Visitors in Saudi Arabia (time zone
    Asia/Riyadh) see riyals first, at the fixed 3.75 peg, with the dollar amount they will be charged. */
-const SO_PRICE_USD = { m: 29, y: 290 };      // ◄ must match the Lemon Squeezy product: monthly 29, yearly 290 ("2 months free", ≈ $24/month)
+const SO_PRICE_USD = { m: 29, q: 79, y: 290 };   // ◄ must match the Lemon Squeezy product: monthly 29, every 3 months 79, yearly 290 ("2 months free", ≈ $24/month)
+/* Release q: 3-month plan ($79, ≈ $26/month). Same single checkout link: the customer picks the plan in the Lemon Squeezy checkout.
+   PLAN_QUARTERLY_ENABLED = false → only Monthly and Yearly, exactly as release p. Needs the "every 3 months" variant on the LS product. */
+const PLAN_QUARTERLY_ENABLED = true;
 const SO_SAR_PER_USD = 3.75;
 function soIsSaudi() {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Riyadh"; } catch { return false; }
 }
 function soPrice(k) {
-  const usd = k === "y" ? SO_PRICE_USD.y : SO_PRICE_USD.m;
+  const usd = SO_PRICE_USD[k] != null ? SO_PRICE_USD[k] : SO_PRICE_USD.m;
   if (!soIsSaudi()) return { main: "$" + usd.toLocaleString("en-US"), usd: "" };
   return { main: "SAR " + Math.round(usd * SO_SAR_PER_USD).toLocaleString("en-US"), usd: "$" + usd.toLocaleString("en-US") };
 }
@@ -7164,7 +7167,7 @@ function SoProNotice() {
       background: "rgba(245,158,11,.06)", border: "1px solid rgba(245,158,11,.22)" }}>
       <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 13, letterSpacing: 2,
         textTransform: "uppercase", color: "#fbbf24", marginBottom: 7 }}>{soMT(lang, "proNoticeTtl")}</div>
-      <div style={{ fontSize: 15.5, lineHeight: 1.65, color: "#94a3b8" }}>{soMT(lang, "proNoticeBody", { m: iso(soPrice("m").main), y: iso(soPrice("y").main) })}</div>
+      <div style={{ fontSize: 15.5, lineHeight: 1.65, color: "#94a3b8" }}>{soMT(lang, PLAN_QUARTERLY_ENABLED ? "proNoticeBodyQ" : "proNoticeBody", { m: iso(soPrice("m").main), q: iso(soPrice("q").main), y: iso(soPrice("y").main) })}</div>
     </div>
   );
 }
@@ -7223,6 +7226,8 @@ const SO_MT = {
   bestValue:  { en: "Best value", ar: "الأوفر", ru: "Выгоднее", zh: "最划算", es: "Mejor precio" },
   perMo:      { en: "/month", ar: "/شهر", ru: "/мес.", zh: "/月", es: "/mes" },
   perYr:      { en: "/year", ar: "/سنة", ru: "/год", zh: "/年", es: "/año" },
+  quarterly:  { en: "3 months", ar: "3 أشهر", ru: "3 месяца", zh: "3 个月", es: "3 meses" },
+  perQ:       { en: "/3 months", ar: "/3 أشهر", ru: "/3 мес.", zh: "/3个月", es: "/3 meses" },
   choose:     { en: "Continue to secure checkout", ar: "المتابعة إلى الدفع الآمن", ru: "Перейти к безопасной оплате", zh: "前往安全支付", es: "Ir al pago seguro" },
   secure:     { en: "Secure checkout by Lemon Squeezy — card details never touch this site.", ar: "دفع آمن عبر Lemon Squeezy — بيانات البطاقة لا تمر عبر هذا الموقع.", ru: "Безопасная оплата через Lemon Squeezy — данные карты не проходят через этот сайт.", zh: "由 Lemon Squeezy 提供安全支付 — 卡信息不会经过本网站。", es: "Pago seguro con Lemon Squeezy: los datos de la tarjeta nunca pasan por este sitio." },
   waiting:    { en: "Confirming your payment…", ar: "جارٍ تأكيد الدفع…", ru: "Подтверждаем оплату…", zh: "正在确认付款…", es: "Confirmando su pago…" },
@@ -7256,6 +7261,11 @@ const SO_MT = {
                    ru: "Неограниченные расчёты и отчёты раскроя в PDF и Excel: {m} в месяц или {y} в год, налоги включены. Отмена в любой момент.",
                    zh: "无限次优化，含 PDF 与 Excel 切割报告：每月 {m} 或每年 {y}，含税。随时取消。",
                    es: "Optimizaciones ilimitadas con informes de corte en PDF y Excel: {m} al mes o {y} al año, impuestos incluidos. Cancele cuando quiera." },
+  proNoticeBodyQ: { en: "Unlimited optimizations with PDF & Excel cutting reports: {m} a month, {q} for 3 months or {y} a year, tax included. Cancel anytime.",
+                   ar: "تحسين بلا حدود مع تقارير قص PDF و Excel: {m} شهريًا أو {q} لكل 3 أشهر أو {y} سنويًا، شامل الضريبة. إلغاء في أي وقت.",
+                   ru: "Неограниченные расчёты и отчёты раскроя в PDF и Excel: {m} в месяц, {q} за 3 месяца или {y} в год, налоги включены. Отмена в любой момент.",
+                   zh: "无限次优化，含 PDF 与 Excel 切割报告：每月 {m}、每 3 个月 {q} 或每年 {y}，含税。随时取消。",
+                   es: "Optimizaciones ilimitadas con informes de corte en PDF y Excel: {m} al mes, {q} cada 3 meses o {y} al año, impuestos incluidos. Cancele cuando quiera." },
 };
 const soMT = (lang, k, vars) => {
   const e = SO_MT[k]; let s = e ? (e[lang] != null ? e[lang] : e.en) : k;
@@ -7586,7 +7596,7 @@ function SoMemberHost() {
     return run(async () => {
       try {
         const s = await soSession(); if (!s) { setV("in"); return; }
-        const link = plan === "y" ? MEMBERSHIP.checkoutYearly : MEMBERSHIP.checkoutMonthly;
+        const link = plan === "y" ? MEMBERSHIP.checkoutYearly : MEMBERSHIP.checkoutMonthly;   // "q" uses the same single link (plan picked in the checkout)
         const u = new URL(link);
         u.searchParams.set("checkout[email]", s.user.email || email.trim());
         u.searchParams.set("checkout[custom][user_id]", s.user.id);
@@ -7655,16 +7665,26 @@ function SoMemberHost() {
       </div>
       {hint && <span style={{ display: "block", marginTop: 6, fontSize: 14.5, color: "#64748b", fontWeight: 400 }}>{L("passHint")}</span>}
     </label>);
+  // release q: with the 3-month plan the three plans are rows (three side-by-side cards do not fit "SAR 1,088" on a phone)
+  const showQ = PLAN_QUARTERLY_ENABLED && !!MEMBERSHIP.checkoutMonthly;
   const planCard = k => {
     const one = MEMBERSHIP.checkoutMonthly === MEMBERSHIP.checkoutYearly;   // one link → plans shown as info, chosen in the checkout
-    const on = !one && pick === k, pr = soPrice(k), price = pr.main;
+    const on = !one && pick === k, pr = soPrice(k), price = pr.main, rows = showQ;
+    const name = L(k === "y" ? "yearly" : k === "q" ? "quarterly" : "monthly"), per = L(k === "y" ? "perYr" : k === "q" ? "perQ" : "perMo");
+    const sub = price && <div style={{ marginTop: 4, fontSize: 14.5, color: "#94a3b8" }}>{pr.usd && <>{L("billed", { usd: "\u2068" + pr.usd + "\u2069" })}{" · "}</>}{L("taxIncl")}</div>;
     return (
-      <button key={k} type="button" onClick={() => setPick(k)} aria-pressed={on} style={{ flex: "1 1 180px", position: "relative", padding: "18px 16px", borderRadius: 12, cursor: "pointer", textAlign: "start",
+      <button key={k} type="button" onClick={() => setPick(k)} aria-pressed={on} style={{ flex: rows ? "1 1 100%" : "1 1 180px", position: "relative", padding: rows ? "14px 16px" : "18px 16px", borderRadius: 12, cursor: "pointer", textAlign: "start",
+        ...(rows ? { display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "4px 12px" } : {}),
         background: on ? "rgba(245,158,11,.12)" : "#0a0f18", border: `2px solid ${on ? "rgba(245,158,11,.8)" : "#243044"}`, color: "#e2e8f0", fontFamily: "inherit" }}>
         {k === "y" && MEMBERSHIP.checkoutMonthly && <span style={{ position: "absolute", top: -11, insetInlineEnd: 12, padding: "2px 10px", borderRadius: 20, background: "#f59e0b", color: "#1a1206", fontSize: 13.5, fontWeight: 800 }}>{L("bestValue")}</span>}
-        <div style={{ fontSize: 15, color: "#94a3b8", fontWeight: 700, letterSpacing: 0.6 }}>{one ? "" : on ? "● " : "○ "}{L(k === "y" ? "yearly" : "monthly")}</div>
-        {price && <div style={{ marginTop: 6 }}><span dir="ltr" style={{ fontSize: 34, fontWeight: 900, color: "#f8fafc", unicodeBidi: "isolate", whiteSpace: "nowrap" }}>{price}</span><span style={{ fontSize: 16, color: "#94a3b8", whiteSpace: "nowrap" }}> {L(k === "y" ? "perYr" : "perMo")}</span></div>}
-        {price && <div style={{ marginTop: 4, fontSize: 14.5, color: "#94a3b8" }}>{pr.usd && <>{L("billed", { usd: "\u2068" + pr.usd + "\u2069" })}{" · "}</>}{L("taxIncl")}</div>}
+        {rows ? <>
+          <div><div style={{ fontSize: 16, color: "#e2e8f0", fontWeight: 800 }}>{one ? "" : on ? "● " : "○ "}{name}</div>{sub}</div>
+          {price && <div style={{ whiteSpace: "nowrap" }}><span dir="ltr" style={{ fontSize: 28, fontWeight: 900, color: "#f8fafc", unicodeBidi: "isolate" }}>{price}</span><span style={{ fontSize: 15, color: "#94a3b8" }}> {per}</span></div>}
+        </> : <>
+          <div style={{ fontSize: 15, color: "#94a3b8", fontWeight: 700, letterSpacing: 0.6 }}>{one ? "" : on ? "● " : "○ "}{name}</div>
+          {price && <div style={{ marginTop: 6 }}><span dir="ltr" style={{ fontSize: 34, fontWeight: 900, color: "#f8fafc", unicodeBidi: "isolate", whiteSpace: "nowrap" }}>{price}</span><span style={{ fontSize: 16, color: "#94a3b8", whiteSpace: "nowrap" }}> {per}</span></div>}
+          {sub}
+        </>}
       </button>);
   };
   return (
@@ -7727,6 +7747,7 @@ function SoMemberHost() {
           </ul>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 22 }}>
             {MEMBERSHIP.checkoutMonthly && planCard("m")}
+            {showQ && planCard("q")}
             {MEMBERSHIP.checkoutYearly && planCard("y")}
           </div>
           <button disabled={busy} onClick={() => pay(pick)} style={BTN}>{busy ? "…" : "🔒 " + L("choose")}</button>
